@@ -1,0 +1,30 @@
+name: musicdl-web
+
+services:
+  musicdl-web:
+    image: ${MUSICDL_WEB_IMAGE:-musicdl-web:0.1.0-spike-20260731}
+    container_name: musicdl-web
+    platform: linux/amd64
+    user: "1000:1000"
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      TZ: Asia/Shanghai
+    ports:
+      - "4534:4534"
+    volumes:
+      - /data/docker/musicdl-web/data:/app/data
+      - /data/docker/musicdl-web/tmp:/app/tmp
+      - /data/docker/musicdl-web/secrets/session.key:/run/secrets/session.key:ro
+      - /data/media/music:/music:ro
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

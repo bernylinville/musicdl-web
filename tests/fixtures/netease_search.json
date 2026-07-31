@@ -1,0 +1,21 @@
+{
+  "code": 200,
+  "result": {
+    "songCount": 3,
+    "songs": [
+      {
+        "id": 101,
+        "name": "Fixture Song",
+        "ar": [{"id": 1, "name": "Fixture Artist"}],
+        "al": {
+          "id": 10,
+          "name": "Fixture Album",
+          "picUrl": "http://p1.music.126.net/redacted/cover.jpg"
+        },
+        "dt": 213456,
+        "privilege": {"fee": 0},
+        "url": "https://redacted.invalid/must-not-cross-boundary"
+      }
+    ]
+  }
+}

@@ -1,0 +1,36 @@
+# Upstream reference checkout; never part of musicdl-web.
+/musicdl/
+
+# OMX runtime state is local orchestration data.
+/.omx/
+
+# Python
+/.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+/dist/
+
+# Frontend build artifacts
+/frontend/node_modules/
+/frontend/dist/
+
+# Local runtime data and secrets
+/.env
+/.env.*
+!/.env.example
+/data/
+/tmp/
+/secrets/
+*.db
+*.sqlite*
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/

@@ -1,0 +1,32 @@
+{
+  "code": 0,
+  "req_1": {
+    "code": 0,
+    "data": {
+      "meta": {
+        "sum": 3,
+        "nextpage": 3
+      },
+      "body": {
+        "song": {
+          "list": [
+            {
+              "id": 202,
+              "mid": "fixture-track-mid",
+              "title": "QQ Fixture Song",
+              "singer": [{"id": 2, "name": "QQ Fixture Artist"}],
+              "album": {
+                "id": 20,
+                "mid": "fixture-album-mid",
+                "name": "QQ Fixture Album"
+              },
+              "interval": 187,
+              "file": {"media_mid": "redacted"},
+              "url": "https://redacted.invalid/must-not-cross-boundary"
+            }
+          ]
+        }
+      }
+    }
+  }
+}
