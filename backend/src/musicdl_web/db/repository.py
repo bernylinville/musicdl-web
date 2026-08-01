@@ -273,6 +273,13 @@ class Repository:
         if not path.exists():
             return ManagedDecision(allowed=True, reason="missing", existing_path=path)
         if requested <= Quality(row["quality"]):
+            # Allow a full re-download when audio is present but album art was never
+            # written (earlier PNG/size proxy failures). Navidrome-facing cover.jpg /
+            # cover.png sit next to the managed audio file.
+            if not _has_album_cover(path):
+                return ManagedDecision(
+                    allowed=True, reason="cover_missing", existing_path=path
+                )
             return ManagedDecision(allowed=False, reason="same_or_lower", existing_path=path)
         return ManagedDecision(allowed=True, reason="upgrade", existing_path=path)
 
@@ -354,6 +361,11 @@ def _dump_dt(value: datetime) -> str:
 
 def _load_dt(value: str) -> datetime:
     return datetime.fromisoformat(value)
+
+
+def _has_album_cover(audio_path: Path) -> bool:
+    parent = audio_path.parent
+    return (parent / "cover.jpg").is_file() or (parent / "cover.png").is_file()
 
 
 def _row_to_job(row: sqlite3.Row) -> Job:

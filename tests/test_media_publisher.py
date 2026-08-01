@@ -166,6 +166,24 @@ def test_missing_managed_file_allows_redownload(tmp_path: Path) -> None:
     assert decision.reason == "missing"
 
 
+def test_managed_without_cover_allows_same_quality_redownload(tmp_path: Path) -> None:
+    repository = Repository(tmp_path / "app.db")
+    audio = tmp_path / "music/Artist/Singles/Song.flac"
+    audio.parent.mkdir(parents=True)
+    audio.write_bytes(b"fLaC" + b"x" * 32)
+    repository.register_media(Source.NETEASE, "coverless", Quality.MASTER, audio)
+
+    decision = repository.managed_decision(Source.NETEASE, "coverless", Quality.MASTER)
+
+    assert decision.allowed
+    assert decision.reason == "cover_missing"
+
+    (audio.parent / "cover.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 8 + b"IEND")
+    blocked = repository.managed_decision(Source.NETEASE, "coverless", Quality.MASTER)
+    assert not blocked.allowed
+    assert blocked.reason == "same_or_lower"
+
+
 def test_quality_upgrade_removes_previous_managed_lyrics(tmp_path: Path) -> None:
     repository = Repository(tmp_path / "app.db")
     old_audio = tmp_path / "music/Artist/Singles/Old.flac"
