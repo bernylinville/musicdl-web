@@ -153,6 +153,54 @@ async def test_runtime_matches_frontend_api_and_revalidates_exact_tier(
     runtime.close()
 
 
+async def test_runtime_upgrades_http_netease_media_urls_to_https(tmp_path: Path) -> None:
+    key_file = tmp_path / "session.key"
+    key_file.write_bytes(b"h" * 32)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/w/nuser/account/get":
+            return httpx.Response(
+                200,
+                json={
+                    "code": 200,
+                    "account": {"id": 9},
+                    "profile": {"userId": 9, "nickname": "HTTP CDN"},
+                },
+            )
+        if request.url.path == "/api/song/enhance/player/url/v1":
+            return httpx.Response(
+                200,
+                json={
+                    "code": 200,
+                    "data": [
+                        {
+                            "id": 202,
+                            "level": "standard",
+                            "url": "http://m801.music.126.net/media/standard.mp3",
+                            "size": 2048,
+                            "type": "mp3",
+                            "freeTrialInfo": None,
+                        }
+                    ],
+                },
+            )
+        raise AssertionError(request.url)
+
+    runtime = ProductionPlatformRuntime(
+        RuntimeSettings(
+            session_key_file=key_file,
+            session_root=tmp_path / "sessions",
+            artwork_root=tmp_path / "artwork",
+        ),
+        transport=httpx.MockTransport(handler),
+    )
+    runtime.import_session(Source.NETEASE, "MUSIC_U=http-cdn-session")
+    exact = runtime._resolve_netease_exact("202", "standard", "MUSIC_U=http-cdn-session")
+    assert exact.host == "m801.music.126.net"
+    assert exact.source_url.startswith("https://m801.music.126.net/")
+    runtime.close()
+
+
 async def test_invalid_platform_cover_does_not_block_download_preparation(
     tmp_path: Path,
 ) -> None:

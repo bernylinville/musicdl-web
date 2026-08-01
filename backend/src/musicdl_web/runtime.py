@@ -566,6 +566,10 @@ class ProductionPlatformRuntime:
             raise LookupError("Netease exact quality is unavailable")
         if not isinstance(size, int) or isinstance(size, bool) or size <= 0:
             raise LookupError("Netease exact quality is unavailable")
+        # Netease often returns http://m*.music.126.net/... CDN links; upgrade to
+        # HTTPS for the same allowlisted host so downloads keep TLS on.
+        if source_url.startswith("http://"):
+            source_url = "https://" + source_url.removeprefix("http://")
         parsed = urlsplit(source_url)
         host = parsed.hostname.lower() if parsed.hostname else ""
         if (

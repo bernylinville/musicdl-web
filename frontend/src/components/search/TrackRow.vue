@@ -26,6 +26,16 @@ let observer: IntersectionObserver | null = null
 
 watch(() => props.track.coverUrl, () => { coverFailed.value = false })
 
+// Selecting a track should always kick off quality confirmation (not only visibility).
+watch(
+  () => props.selected,
+  (selected) => {
+    if (selected && (props.quality.status === 'idle' || props.quality.status === 'session_required')) {
+      emit('requestQuality', props.track)
+    }
+  },
+)
+
 const previewLabel = computed(() => {
   if (!props.previewActive) return '短试听'
   if (props.previewState === 'loading') return '加载中'
@@ -36,6 +46,7 @@ const previewLabel = computed(() => {
 const qualityStatusLabel = computed(() => {
   if (props.quality.status === 'loading') return '正在确认…'
   if (props.quality.status === 'idle') return '等待确认'
+  if (props.quality.status === 'ready') return null
   return props.quality.message
 })
 
