@@ -75,14 +75,18 @@ def test_server_delivery_registers_managed_media_only_after_publication(
     tmp_path: Path, repository: Repository, job_request: JobRequest
 ) -> None:
     delivery = build_delivery(tmp_path, repository)
+    jpeg = b"\xff\xd8\xff\xe0cover\xff\xd9"
 
-    output = delivery.to_server(downloaded_file(tmp_path), job_request, lyrics="line")
+    output = delivery.to_server(
+        downloaded_file(tmp_path), job_request, cover=jpeg, lyrics="line"
+    )
 
     decision = repository.managed_decision(
         job_request.track.source, job_request.track.track_id, job_request.quality
     )
     assert output.is_relative_to(tmp_path / "music")
     assert decision.reason == "same_or_lower"
+    assert (output.parent / "cover.jpg").read_bytes() == jpeg
     assert output.with_suffix(".lrc").read_text(encoding="utf-8") == "line"
 
 
