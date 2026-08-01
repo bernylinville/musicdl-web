@@ -140,26 +140,31 @@ def test_qr_expiry_and_cancel_erase_token_without_polling_platform() -> None:
     assert flow.discarded == [flow.token, flow.token]
 
 
-def test_netease_flow_uses_official_forms_same_cookie_jar_and_verified_material(
+def test_netease_flow_uses_eapi_interface_host_and_verified_material(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """SPlayer-compatible path: eapi POST to interface.music.163.com, not plain web forms."""
+
     requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
         form = parse_qs(request.content.decode()) if request.content else {}
-        if request.url.path == "/api/login/qrcode/unikey":
-            assert form == {"type": ["3"]}
+        if request.url.path == "/eapi/login/qrcode/unikey":
+            assert request.url.host == "interface.music.163.com"
+            assert "params" in form
             return httpx.Response(200, json={"code": 200, "unikey": "qr-key-secret"})
-        if request.url.path == "/api/login/qrcode/client/login":
-            assert form == {"key": ["qr-key-secret"], "type": ["3"]}
+        if request.url.path == "/eapi/login/qrcode/client/login":
+            assert request.url.host == "interface.music.163.com"
+            assert "params" in form
             return httpx.Response(
                 200,
                 headers={"set-cookie": "MUSIC_U=session-secret; Path=/; Secure"},
                 json={"code": 803},
             )
         if request.url.path == "/api/w/nuser/account/get":
-            assert request.headers["cookie"] == "MUSIC_U=session-secret"
+            assert request.url.host == "music.163.com"
+            assert "MUSIC_U=session-secret" in request.headers.get("cookie", "")
             return httpx.Response(
                 200,
                 json={
@@ -168,7 +173,7 @@ def test_netease_flow_uses_official_forms_same_cookie_jar_and_verified_material(
                     "profile": {"userId": 42, "nickname": "安全昵称"},
                 },
             )
-        raise AssertionError("unexpected request")
+        raise AssertionError(f"unexpected request {request.url}")
 
     encoded_payloads: list[str] = []
     monkeypatch.setattr(
@@ -191,8 +196,13 @@ def test_netease_flow_uses_official_forms_same_cookie_jar_and_verified_material(
     result = flow.poll(Source.NETEASE, token)
     assert result.state is QrLoginState.SUCCEEDED
     assert result.material is not None
-    assert result.material.cookie_header_for(Source.NETEASE) == "MUSIC_U=session-secret"
+    assert "MUSIC_U=session-secret" in result.material.cookie_header_for(Source.NETEASE)
     assert [request.url.scheme for request in requests] == ["https", "https", "https"]
+    assert [request.url.host for request in requests] == [
+        "interface.music.163.com",
+        "interface.music.163.com",
+        "music.163.com",
+    ]
 
     flow.discard(Source.NETEASE, token)
     assert "qr-key-secret" not in repr(token)
@@ -227,8 +237,7 @@ def test_netease_confirm_tolerates_empty_sibling_cookies_and_string_ids(
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/unikey"):
-            form = parse_qs(request.content.decode()) if request.content else {}
-            assert form == {"type": ["3"]}
+            assert "params" in parse_qs(request.content.decode())
             return httpx.Response(200, json={"code": 200, "unikey": "confirm-key"})
         if request.url.path.endswith("/client/login"):
             return httpx.Response(
@@ -267,42 +276,14 @@ def test_netease_confirm_tolerates_empty_sibling_cookies_and_string_ids(
     flow.discard(Source.NETEASE, token)
 
 
-def test_cookie_jar_skips_empty_values_without_aborting() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            headers=[
-                ("set-cookie", "MUSIC_U=keep; Path=/"),
-                ("set-cookie", "EMPTY=; Path=/"),
-            ],
-            json={"code": 803},
-        )
+def test_eapi_params_is_stable_hex() -> None:
+    from musicdl_web.sessions.netease_eapi import eapi_params
 
-    client = PlatformCookieJarClient(
-        allowed_host="music.163.com", transport=httpx.MockTransport(handler)
-    )
-    client.post("https://music.163.com/api/login/qrcode/client/login", data={"key": "k"})
-    assert client.cookie_mapping() == {"MUSIC_U": "keep"}
-    client.close()
-
-
-def test_cookie_jar_prefers_root_path_when_same_name_conflicts() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            headers=[
-                ("set-cookie", "MUSIC_U=deep; Path=/api"),
-                ("set-cookie", "MUSIC_U=root; Path=/"),
-            ],
-            json={"code": 803},
-        )
-
-    client = PlatformCookieJarClient(
-        allowed_host="music.163.com", transport=httpx.MockTransport(handler)
-    )
-    client.post("https://music.163.com/api/login/qrcode/client/login", data={"key": "k"})
-    assert client.cookie_mapping()["MUSIC_U"] == "root"
-    client.close()
+    first = eapi_params("/api/login/qrcode/unikey", {"type": 3})
+    second = eapi_params("/api/login/qrcode/unikey", {"type": 3})
+    assert first == second
+    assert len(first) > 32
+    assert all(c in "0123456789ABCDEF" for c in first)
 
 
 def test_netease_confirm_8821_with_session_cookies_still_succeeds(
@@ -382,7 +363,6 @@ def test_netease_confirm_accepts_cookie_field_in_json_body(
         if request.url.path.endswith("/unikey"):
             return httpx.Response(200, json={"code": 200, "unikey": "body-cookie-key"})
         if request.url.path.endswith("/client/login"):
-            # No Set-Cookie; session only in body — observed on some Netease edges.
             return httpx.Response(
                 200,
                 json={
@@ -461,9 +441,9 @@ async def test_runtime_qr_api_is_secret_free_and_retains_old_session_on_failure(
                     },
                 )
             return httpx.Response(200, json={"code": 200, "account": None, "profile": None})
-        if request.url.path == "/api/login/qrcode/unikey":
+        if request.url.path.endswith("/login/qrcode/unikey"):
             return httpx.Response(200, json={"code": 200, "unikey": "api-secret-key"})
-        if request.url.path == "/api/login/qrcode/client/login":
+        if request.url.path.endswith("/login/qrcode/client/login"):
             poll_count += 1
             if poll_count == 1:
                 return httpx.Response(200, json={"code": 802})
@@ -556,16 +536,16 @@ async def test_runtime_qr_success_atomically_replaces_session_and_returns_safe_v
     key_file.write_bytes(b"s" * 32)
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/api/login/qrcode/unikey":
+        if request.url.path.endswith("/login/qrcode/unikey"):
             return httpx.Response(200, json={"code": 200, "unikey": "success-key"})
-        if request.url.path == "/api/login/qrcode/client/login":
+        if request.url.path.endswith("/login/qrcode/client/login"):
             return httpx.Response(
                 200,
                 headers={"set-cookie": "MUSIC_U=verified-session; Path=/; Secure"},
                 json={"code": 803},
             )
         if request.url.path == "/api/w/nuser/account/get":
-            assert request.headers.get("cookie") == "MUSIC_U=verified-session"
+            assert "MUSIC_U=verified-session" in (request.headers.get("cookie") or "")
             return httpx.Response(
                 200,
                 json={
@@ -574,7 +554,7 @@ async def test_runtime_qr_success_atomically_replaces_session_and_returns_safe_v
                     "profile": {"userId": 99, "nickname": "已验证"},
                 },
             )
-        raise AssertionError("unexpected request")
+        raise AssertionError(f"unexpected request {request.url}")
 
     runtime = ProductionPlatformRuntime(
         RuntimeSettings(
@@ -608,7 +588,7 @@ async def test_runtime_qr_success_atomically_replaces_session_and_returns_safe_v
     assert "verified-session" not in str(body)
     loaded = runtime._sessions.material(Source.NETEASE)
     assert loaded is not None
-    assert loaded[0].cookie_header_for(Source.NETEASE) == "MUSIC_U=verified-session"
+    assert "MUSIC_U=verified-session" in loaded[0].cookie_header_for(Source.NETEASE)
     runtime.close()
 
 
@@ -619,7 +599,7 @@ def test_runtime_serializes_concurrent_qr_start_and_cancel(tmp_path: Path) -> No
     key_file.write_bytes(b"t" * 32)
 
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/api/login/qrcode/unikey"
+        assert request.url.path.endswith("/login/qrcode/unikey")
         return httpx.Response(200, json={"code": 200, "unikey": "thread-key"})
 
     runtime = ProductionPlatformRuntime(
@@ -654,10 +634,10 @@ def test_manual_import_and_clear_cancel_older_qr_challenges(tmp_path: Path) -> N
     key_file.write_bytes(b"u" * 32)
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/api/login/qrcode/unikey":
+        if request.url.path.endswith("/login/qrcode/unikey"):
             return httpx.Response(200, json={"code": 200, "unikey": "older-key"})
         if request.url.path == "/api/w/nuser/account/get":
-            assert request.headers.get("cookie") == "MUSIC_U=manual-session"
+            assert "MUSIC_U=manual-session" in (request.headers.get("cookie") or "")
             return httpx.Response(
                 200,
                 json={

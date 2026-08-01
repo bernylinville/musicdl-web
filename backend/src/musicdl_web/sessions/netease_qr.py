@@ -1,4 +1,9 @@
-"""Official Netease QR-login flow with one isolated cookie jar per challenge."""
+"""Netease QR-login flow via eapi (SPlayer / NeteaseCloudMusicApi-compatible).
+
+Plain HTTPS form posts to music.163.com often return business code 8821 without
+MUSIC_U after phone confirm. Desktop clients (SPlayer-Next) default empty crypto
+to eapi against interface.music.163.com — that path is what we drive here.
+"""
 
 from __future__ import annotations
 
@@ -18,28 +23,18 @@ from urllib.parse import urlsplit
 import httpx
 
 from ..models import Source
-from ..network import PlatformCookieJarClient
 from .errors import QrLoginError, QrLoginUnavailable
 from .models import SessionMaterial
+from .netease_eapi import NeteaseEapiClient
 from .qr import QrFlowResult, QrLoginState
 from .qr_image import qr_svg_data_url
 
-_UNIKEY_ENDPOINT = "https://music.163.com/api/login/qrcode/unikey"
-_POLL_ENDPOINT = "https://music.163.com/api/login/qrcode/client/login"
-_ACCOUNT_ENDPOINT = "https://music.163.com/api/w/nuser/account/get"
+_UNIKEY_API = "/api/login/qrcode/unikey"
+_POLL_API = "/api/login/qrcode/client/login"
+_ACCOUNT_URL = "https://music.163.com/api/w/nuser/account/get"
 _LOGIN_URL_PREFIX = "https://music.163.com/login?codekey="
-# type=3 is the modern Web QR challenge used by current Netease web clients.
-_QR_TYPE = "3"
-# Observed after phone confirm when Netease withholds MUSIC_U and returns a gate URL.
+_QR_TYPE = 3
 _CONFIRM_REDIRECT_CODE = 8821
-_HEADERS = {
-    "Referer": "https://music.163.com/",
-    # Browser-like UA: some confirm paths omit session cookies for unknown agents.
-    "User-Agent": (
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    ),
-}
 _TTL = timedelta(minutes=5)
 _DEBUG_LOG = Path("/app/tmp/qr-debug.log")
 _LOG = logging.getLogger("musicdl_web.sessions.netease_qr")
@@ -51,14 +46,14 @@ _SECURITY_GATE_MESSAGE = (
 
 @dataclass(slots=True)
 class _NeteaseQrToken:
-    client: PlatformCookieJarClient | None = field(repr=False)
+    client: NeteaseEapiClient | None = field(repr=False)
     key: str | None = field(repr=False)
     image: bytes | None = field(repr=False)
     payload: str | None = field(repr=False)
 
 
 class NeteaseQrLoginFlow:
-    """Drive the official Web QR endpoints without sharing cookies between challenges."""
+    """Drive Netease QR login with one isolated eapi client per challenge."""
 
     def __init__(
         self,
@@ -74,25 +69,24 @@ class NeteaseQrLoginFlow:
     def begin(self, source: Source) -> tuple[object, timedelta]:
         if source is not Source.NETEASE:
             raise QrLoginUnavailable("QR login is unavailable for this platform")
-        client = PlatformCookieJarClient(
-            allowed_host="music.163.com",
-            transport=self._transport,
-            timeout=self._timeout,
-            headers=_HEADERS,
-        )
+        client = NeteaseEapiClient(transport=self._transport, timeout=self._timeout)
         try:
-            response = client.post(_UNIKEY_ENDPOINT, data={"type": _QR_TYPE})
+            response = client.post_eapi(_UNIKEY_API, {"type": _QR_TYPE})
             root = _json_mapping(response)
             key = root.get("unikey")
             if root.get("code") != 200 or not isinstance(key, str) or not key:
+                _debug(
+                    {
+                        "event": "unikey_failed",
+                        "code": root.get("code"),
+                        "body_keys": sorted(root.keys()),
+                    }
+                )
                 raise QrLoginError("Netease QR login is unavailable")
-            # Short chainId keeps the QR payload within version-5 capacity while matching
-            # the modern web login URL shape more closely than codekey-only links.
             payload = f"{_LOGIN_URL_PREFIX}{key}&chainId={_short_chain_id()}"
             image_data_url = qr_svg_data_url(payload)
             image = _decode_svg_data_url(image_data_url)
-            token = _NeteaseQrToken(client, key, image, payload)
-            return token, _TTL
+            return _NeteaseQrToken(client, key, image, payload), _TTL
         except QrLoginError:
             client.close()
             raise
@@ -115,9 +109,7 @@ class NeteaseQrLoginFlow:
         if client is None or key is None:
             raise QrLoginError("Netease QR challenge is inactive")
         try:
-            response = client.post(
-                _POLL_ENDPOINT, data={"key": key, "type": _QR_TYPE}
-            )
+            response = client.post_eapi(_POLL_API, {"key": key, "type": _QR_TYPE})
             root = _json_mapping(response)
             code = root.get("code")
             if code == 801:
@@ -138,9 +130,9 @@ class NeteaseQrLoginFlow:
                     "message": _safe_message(root.get("message")),
                     "redirect": _redact_url(root.get("redirectUrl")),
                     "body_keys": sorted(root.keys()),
-                    "body_types": {k: type(v).__name__ for k, v in root.items()},
                     "set_cookie_names": _set_cookie_names(response),
                     "jar_names": sorted(client.cookie_mapping().keys()),
+                    "transport": "eapi",
                 }
             )
             raise QrLoginError("Netease QR login returned an invalid state")
@@ -153,34 +145,30 @@ class NeteaseQrLoginFlow:
 
     def _handle_confirm_redirect(
         self,
-        client: PlatformCookieJarClient,
+        client: NeteaseEapiClient,
         response: httpx.Response,
         root: Mapping[str, Any],
     ) -> QrFlowResult:
-        """Handle post-confirm gate (8821): try same-host finalize, else fail clearly."""
-
-        redirect = root.get("redirectUrl")
         _debug(
             {
                 "event": "poll_8821",
                 "message": _safe_message(root.get("message")),
-                "redirect": _redact_url(redirect),
+                "redirect": _redact_url(root.get("redirectUrl")),
                 "set_cookie_names": _set_cookie_names(response),
                 "jar_names": sorted(client.cookie_mapping().keys()),
-                "body_keys": sorted(root.keys()),
+                "transport": "eapi",
             }
         )
-        # Some edges still attach session cookies alongside 8821.
         cookies = _merge_session_cookies(client, response, root)
         if not {"MUSIC_A", "MUSIC_U"}.isdisjoint(cookies):
             return self._complete_authenticated_session(client, response, root)
 
+        redirect = root.get("redirectUrl")
         if isinstance(redirect, str) and redirect.startswith("https://music.163.com/"):
             try:
-                finalize = client.get(redirect)
+                finalize = client.get_web(redirect)
             except Exception:
                 raise QrLoginError(_SECURITY_GATE_MESSAGE) from None
-            finalize_root: Mapping[str, Any]
             try:
                 finalize_root = _json_mapping(finalize)
             except QrLoginError:
@@ -192,7 +180,6 @@ class NeteaseQrLoginFlow:
                     "set_cookie_names": _set_cookie_names(finalize),
                     "jar_names": sorted(cookies.keys()),
                     "has_auth_cookie": not {"MUSIC_A", "MUSIC_U"}.isdisjoint(cookies),
-                    "body_keys": sorted(finalize_root.keys()) if finalize_root else [],
                 }
             )
             if not {"MUSIC_A", "MUSIC_U"}.isdisjoint(cookies):
@@ -204,7 +191,7 @@ class NeteaseQrLoginFlow:
 
     def _complete_authenticated_session(
         self,
-        client: PlatformCookieJarClient,
+        client: NeteaseEapiClient,
         response: httpx.Response,
         root: Mapping[str, Any],
     ) -> QrFlowResult:
@@ -216,13 +203,14 @@ class NeteaseQrLoginFlow:
                 "set_cookie_names": _set_cookie_names(response),
                 "jar_names": sorted(cookies.keys()),
                 "has_auth_cookie": not {"MUSIC_A", "MUSIC_U"}.isdisjoint(cookies),
+                "transport": "eapi",
             }
         )
         if {"MUSIC_A", "MUSIC_U"}.isdisjoint(cookies):
             raise QrLoginError("Netease QR login did not establish a session cookie")
 
-        _seed_client_cookies(client, cookies)
-        account_response = client.get(_ACCOUNT_ENDPOINT)
+        client.merge_cookies(cookies)
+        account_response = client.get_web(_ACCOUNT_URL)
         account = _json_mapping(account_response)
         _debug(
             {
@@ -292,8 +280,6 @@ def _json_mapping(response: httpx.Response) -> Mapping[str, Any]:
 
 
 def _positive_id(value: object) -> int | None:
-    """Coerce Netease account identifiers that may arrive as int or numeric string."""
-
     if isinstance(value, bool):
         return None
     if isinstance(value, int):
@@ -328,22 +314,7 @@ def _set_cookie_names(response: httpx.Response) -> list[str]:
     return names
 
 
-def _parse_set_cookie_headers(response: httpx.Response) -> dict[str, str]:
-    """Parse Set-Cookie name/value pairs without trusting jar domain policy."""
-
-    cookies: dict[str, str] = {}
-    for header in response.headers.get_list("set-cookie"):
-        name_value = header.split(";", 1)[0]
-        name, sep, value = name_value.partition("=")
-        if not sep or not name.strip() or not value:
-            continue
-        cookies[name.strip()] = value
-    return cookies
-
-
 def _parse_body_cookies(root: Mapping[str, Any]) -> dict[str, str]:
-    """Absorb cookie material Netease sometimes places in the JSON body."""
-
     cookies: dict[str, str] = {}
     raw = root.get("cookie")
     if isinstance(raw, str) and raw.strip():
@@ -363,26 +334,16 @@ def _parse_body_cookies(root: Mapping[str, Any]) -> dict[str, str]:
 
 
 def _merge_session_cookies(
-    client: PlatformCookieJarClient,
+    client: NeteaseEapiClient,
     response: httpx.Response,
     root: Mapping[str, Any],
 ) -> dict[str, str]:
     cookies = dict(client.cookie_mapping())
-    cookies.update(_parse_set_cookie_headers(response))
+    from .netease_eapi import parse_set_cookie_headers
+
+    cookies.update(parse_set_cookie_headers(response))
     cookies.update(_parse_body_cookies(root))
-    # Drop empties again after merges.
     return {name: value for name, value in cookies.items() if value}
-
-
-def _seed_client_cookies(
-    client: PlatformCookieJarClient, cookies: Mapping[str, str]
-) -> None:
-    """Ensure subsequent same-host requests send auth cookies we recovered manually."""
-
-    jar = client._client.cookies  # noqa: SLF001 — intentional recovery seam
-    for name, value in cookies.items():
-        if name in {"MUSIC_U", "MUSIC_A", "__csrf", "NMTID"}:
-            jar.set(name, value, domain="music.163.com", path="/")
 
 
 def _account_id_types(root: Mapping[str, Any]) -> dict[str, str]:
@@ -401,12 +362,7 @@ def _account_id_types(root: Mapping[str, Any]) -> dict[str, str]:
 
 
 def _debug(payload: Mapping[str, Any]) -> None:
-    """Append redacted QR diagnostics for NAS operators (no cookie/token values)."""
-
-    record = {
-        "ts": datetime.now(UTC).isoformat(),
-        **dict(payload),
-    }
+    record = {"ts": datetime.now(UTC).isoformat(), **dict(payload)}
     line = json.dumps(record, ensure_ascii=False, separators=(",", ":"))
     try:
         _DEBUG_LOG.parent.mkdir(parents=True, exist_ok=True)
@@ -418,8 +374,6 @@ def _debug(payload: Mapping[str, Any]) -> None:
 
 
 def _short_chain_id() -> str:
-    """Compact chainId that fits the dependency-free QR version-5 payload budget."""
-
     return f"v1_w{secrets.token_hex(2)}_{int(time.time()) % 100_000_000}"
 
 
@@ -427,9 +381,7 @@ def _safe_message(value: object) -> str | None:
     if not isinstance(value, str):
         return None
     text = value.strip()
-    if not text or len(text) > 120:
-        return text[:120] if text else None
-    return text
+    return text[:120] if text else None
 
 
 def _redact_url(value: object) -> dict[str, object] | None:
