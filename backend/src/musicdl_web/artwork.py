@@ -34,7 +34,8 @@ class _MemoryEntry:
 
 
 class ArtworkProxy:
-    _MAX_BYTES = 2 * 1024 * 1024
+    # Netease album art is often multi-megabyte PNG; keep a firm upper bound.
+    _MAX_BYTES = 5 * 1024 * 1024
     _HOST_SUFFIXES = {
         Source.NETEASE: ("music.126.net",),
         Source.QQ: ("y.gtimg.cn",),
@@ -43,6 +44,7 @@ class ArtworkProxy:
         Source.NETEASE: {"Referer": "https://music.163.com/", "User-Agent": "musicdl-web/0.2"},
         Source.QQ: {"Referer": "https://y.qq.com/", "User-Agent": "musicdl-web/0.2"},
     }
+    _ALLOWED_TYPES = frozenset({"image/jpeg", "image/png"})
 
     def __init__(
         self,
@@ -78,11 +80,11 @@ class ArtworkProxy:
             raise ArtworkUnavailable("artwork is unavailable") from None
         finally:
             client.close()
-        content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
         body = response.content
-        if content_type not in {"image/jpeg", "image/jpg"} or not _is_jpeg(body):
-            raise ArtworkUnavailable("artwork response is not a valid JPEG")
-        artwork = Artwork(body=body, content_type="image/jpeg")
+        content_type = detect_image_type(body)
+        if content_type is None:
+            raise ArtworkUnavailable("artwork response is not a valid JPEG or PNG")
+        artwork = Artwork(body=body, content_type=content_type)
         try:
             self._store(key, artwork)
         except Exception:
@@ -109,10 +111,12 @@ class ArtworkProxy:
             content_type = meta.read_text(encoding="ascii").strip()
         except OSError:
             return None
+        detected = detect_image_type(body)
         if (
             len(body) > self._MAX_BYTES
-            or content_type != "image/jpeg"
-            or not _is_jpeg(body)
+            or detected is None
+            or content_type not in self._ALLOWED_TYPES
+            or detected != content_type
         ):
             self._delete_pair(path, meta)
             return None
@@ -170,5 +174,30 @@ class ArtworkProxy:
         return host
 
 
-def _is_jpeg(body: bytes) -> bool:
+def detect_image_type(body: bytes) -> str | None:
+    """Return image/jpeg or image/png from magic bytes; ignore declared Content-Type."""
+
+    if is_jpeg(body):
+        return "image/jpeg"
+    if is_png(body):
+        return "image/png"
+    return None
+
+
+def is_jpeg(body: bytes) -> bool:
     return len(body) >= 4 and body.startswith(b"\xff\xd8\xff") and body.endswith(b"\xff\xd9")
+
+
+def is_png(body: bytes) -> bool:
+    # Signature + IEND chunk trailer is enough for proxy validation.
+    return (
+        len(body) >= 24
+        and body.startswith(b"\x89PNG\r\n\x1a\n")
+        and b"IEND" in body[-12:]
+    )
+
+
+def cover_sidecar_name(content_type: str) -> str:
+    if content_type == "image/png":
+        return "cover.png"
+    return "cover.jpg"

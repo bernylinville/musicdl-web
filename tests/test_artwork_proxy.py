@@ -74,6 +74,22 @@ def test_artwork_proxy_rejects_non_platform_locations(tmp_path: Path, url: str) 
     assert url not in str(exc_info.value)
 
 
+def test_artwork_proxy_accepts_png_by_magic_bytes(tmp_path: Path) -> None:
+    # Minimal valid-looking PNG: signature + IEND trailer (proxy checks magic only).
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16 + b"\x00\x00\x00\x00IEND\xaeB`\x82"
+    proxy = ArtworkProxy(
+        tmp_path,
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200, headers={"content-type": "image/jpg"}, content=png
+            )
+        ),
+    )
+    artwork = proxy.fetch(Source.NETEASE, "png-1", "https://p1.music.126.net/cover.png")
+    assert artwork.content_type == "image/png"
+    assert artwork.body == png
+
+
 @pytest.mark.parametrize(
     ("content_type", "body"),
     [
@@ -81,7 +97,7 @@ def test_artwork_proxy_rejects_non_platform_locations(tmp_path: Path, url: str) 
         ("image/png", b"\x89PNG\r\n"),
         ("image/webp", b"RIFFxxxxWEBP"),
         ("image/jpeg", b"not-a-jpeg"),
-        ("image/jpeg", b"\xff\xd8\xff" + b"x" * (2 * 1024 * 1024) + b"\xff\xd9"),
+        ("image/jpeg", b"\xff\xd8\xff" + b"x" * (5 * 1024 * 1024) + b"\xff\xd9"),
     ],
 )
 def test_artwork_proxy_rejects_invalid_responses(

@@ -8,6 +8,7 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any
 
+from musicdl_web.artwork import detect_image_type
 from musicdl_web.domain import JobRequest
 
 
@@ -35,20 +36,21 @@ class MutagenTagWriter:
         extension = audio.suffix.lower()
         if extension not in {".mp3", ".flac", ".m4a", ".ogg"}:
             raise TaggingError("media format does not support metadata writing")
-        if cover is not None and not _is_jpeg(cover):
-            raise TaggingError("cover image is not a valid JPEG")
+        cover_mime = detect_image_type(cover) if cover is not None else None
+        if cover is not None and cover_mime is None:
+            raise TaggingError("cover image is not a valid JPEG or PNG")
         try:
             media = self._loader(audio)
             if media is None:
                 raise TaggingError("media tagging failed")
             if extension == ".mp3":
-                _write_mp3(media, request, cover, lyrics)
+                _write_mp3(media, request, cover, cover_mime, lyrics)
             elif extension == ".flac":
-                _write_flac(media, request, cover, lyrics)
+                _write_flac(media, request, cover, cover_mime, lyrics)
             elif extension == ".m4a":
-                _write_mp4(media, request, cover, lyrics)
+                _write_mp4(media, request, cover, cover_mime, lyrics)
             else:
-                _write_ogg(media, request, cover, lyrics)
+                _write_ogg(media, request, cover, cover_mime, lyrics)
             media.save()
         except TaggingError:
             raise
@@ -62,7 +64,11 @@ def _load_audio(path: Path) -> Any:
 
 
 def _write_mp3(
-    media: Any, request: JobRequest, cover: bytes | None, lyrics: str | None
+    media: Any,
+    request: JobRequest,
+    cover: bytes | None,
+    cover_mime: str | None,
+    lyrics: str | None,
 ) -> None:
     id3 = import_module("mutagen.id3")
     if media.tags is None:
@@ -87,11 +93,11 @@ def _write_mp3(
         if optional_text is not None:
             tags.add(getattr(id3, class_name)(encoding=3, text=[optional_text]))
     tags.delall("APIC")
-    if cover is not None:
+    if cover is not None and cover_mime is not None:
         tags.add(
             id3.APIC(
                 encoding=3,
-                mime="image/jpeg",
+                mime=cover_mime,
                 type=3,
                 desc="Cover",
                 data=cover,
@@ -103,30 +109,38 @@ def _write_mp3(
 
 
 def _write_flac(
-    media: Any, request: JobRequest, cover: bytes | None, lyrics: str | None
+    media: Any,
+    request: JobRequest,
+    cover: bytes | None,
+    cover_mime: str | None,
+    lyrics: str | None,
 ) -> None:
     _write_vorbis_comments(media, request, lyrics)
     media.clear_pictures()
-    if cover is not None:
+    if cover is not None and cover_mime is not None:
         picture_type = import_module("mutagen.flac").Picture
         picture = picture_type()
         picture.type = 3
-        picture.mime = "image/jpeg"
+        picture.mime = cover_mime
         picture.desc = "Cover"
         picture.data = cover
         media.add_picture(picture)
 
 
 def _write_ogg(
-    media: Any, request: JobRequest, cover: bytes | None, lyrics: str | None
+    media: Any,
+    request: JobRequest,
+    cover: bytes | None,
+    cover_mime: str | None,
+    lyrics: str | None,
 ) -> None:
     _write_vorbis_comments(media, request, lyrics)
     media.pop("metadata_block_picture", None)
-    if cover is not None:
+    if cover is not None and cover_mime is not None:
         picture_type = import_module("mutagen.flac").Picture
         picture = picture_type()
         picture.type = 3
-        picture.mime = "image/jpeg"
+        picture.mime = cover_mime
         picture.desc = "Cover"
         picture.data = cover
         encoded = base64.b64encode(picture.write()).decode("ascii")
@@ -154,7 +168,11 @@ def _write_vorbis_comments(media: Any, request: JobRequest, lyrics: str | None) 
 
 
 def _write_mp4(
-    media: Any, request: JobRequest, cover: bytes | None, lyrics: str | None
+    media: Any,
+    request: JobRequest,
+    cover: bytes | None,
+    cover_mime: str | None,
+    lyrics: str | None,
 ) -> None:
     if media.tags is None:
         media.add_tags()
@@ -175,9 +193,14 @@ def _write_mp4(
         else:
             tags[key] = value
     tags.pop("covr", None)
-    if cover is not None:
+    if cover is not None and cover_mime is not None:
         mp4 = import_module("mutagen.mp4")
-        tags["covr"] = [mp4.MP4Cover(cover, imageformat=mp4.MP4Cover.FORMAT_JPEG)]
+        image_format = (
+            mp4.MP4Cover.FORMAT_PNG
+            if cover_mime == "image/png"
+            else mp4.MP4Cover.FORMAT_JPEG
+        )
+        tags["covr"] = [mp4.MP4Cover(cover, imageformat=image_format)]
 
 
 def _optional_list(value: str | None) -> list[str] | None:
@@ -186,7 +209,3 @@ def _optional_list(value: str | None) -> list[str] | None:
 
 def _number(value: int | None) -> str | None:
     return str(value) if value is not None else None
-
-
-def _is_jpeg(data: bytes) -> bool:
-    return len(data) >= 4 and data.startswith(b"\xff\xd8\xff") and data.endswith(b"\xff\xd9")

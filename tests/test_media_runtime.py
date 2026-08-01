@@ -282,6 +282,6 @@ def test_mutagen_writer_rejects_non_jpeg_without_disclosing_metadata() -> None:
             Path("/private/track.flac"), request(), cover=b"not-jpeg", lyrics="secret lyric"
         )
 
-    assert str(caught.value) == "cover image is not a valid JPEG"
+    assert str(caught.value) == "cover image is not a valid JPEG or PNG"
     assert "private" not in str(caught.value)
     assert "secret" not in str(caught.value)

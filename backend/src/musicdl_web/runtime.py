@@ -520,10 +520,22 @@ class ProductionPlatformRuntime:
         )
 
     async def artwork_for_request(self, request: JobRequest) -> bytes | None:
-        artwork = await asyncio.to_thread(
-            self._artwork.cached, request.track.source, request.track.track_id
-        )
-        return artwork.body if artwork is not None else None
+        source = request.track.source
+        track_id = request.track.track_id
+        artwork = await asyncio.to_thread(self._artwork.cached, source, track_id)
+        if artwork is not None:
+            return artwork.body
+        with self._track_lock:
+            track = self._tracks.get((source, track_id))
+        if track is None or track.cover_url is None:
+            return None
+        try:
+            fetched = await asyncio.to_thread(
+                self._artwork.fetch, source, track_id, track.cover_url
+            )
+        except ArtworkUnavailable:
+            return None
+        return fetched.body
 
     def _session_view(self, source: Source) -> PlatformSessionView:
         status = self._sessions.status(

@@ -11,6 +11,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Protocol
 
+from musicdl_web.artwork import cover_sidecar_name, detect_image_type
 from musicdl_web.db import Repository
 from musicdl_web.domain import JobRequest, MediaMetadata
 from musicdl_web.media.quality_match import probe_matches_request
@@ -97,11 +98,13 @@ class MediaPublisher:
                     lyrics, encoding="utf-8"
                 )
             if cover:
-                (publish_stage / "cover.jpg").write_bytes(cover)
+                cover_type = detect_image_type(cover) or "image/jpeg"
+                cover_name = cover_sidecar_name(cover_type)
+                (publish_stage / cover_name).write_bytes(cover)
             for sidecar in publish_stage.iterdir():
                 if sidecar.is_file() and sidecar != final_stage:
                     sidecar_destination = destination.parent / sidecar.name
-                    if sidecar.name == "cover.jpg" and sidecar_destination.exists():
+                    if sidecar.name in {"cover.jpg", "cover.png"} and sidecar_destination.exists():
                         sidecar.unlink()
                     else:
                         os.replace(sidecar, sidecar_destination)
