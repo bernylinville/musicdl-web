@@ -179,9 +179,10 @@ def test_netease_flow_uses_official_forms_same_cookie_jar_and_verified_material(
     flow = NeteaseQrLoginFlow(transport=httpx.MockTransport(handler))
     token, ttl = flow.begin(Source.NETEASE)
 
-    assert encoded_payloads == [
-        "https://music.163.com/login?codekey=qr-key-secret"
-    ]
+    assert len(encoded_payloads) == 1
+    assert encoded_payloads[0].startswith(
+        "https://music.163.com/login?codekey=qr-key-secret&chainId=v1_w"
+    )
     assert ttl == timedelta(minutes=5)
     assert flow.image(Source.NETEASE, token) == b"<svg></svg>"
     representation = repr(token)
@@ -302,6 +303,76 @@ def test_cookie_jar_prefers_root_path_when_same_name_conflicts() -> None:
     client.post("https://music.163.com/api/login/qrcode/client/login", data={"key": "k"})
     assert client.cookie_mapping()["MUSIC_U"] == "root"
     client.close()
+
+
+def test_netease_confirm_8821_with_session_cookies_still_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/unikey"):
+            return httpx.Response(200, json={"code": 200, "unikey": "gate-key"})
+        if request.url.path.endswith("/client/login"):
+            return httpx.Response(
+                200,
+                headers=[("set-cookie", "MUSIC_U=gate-session; Path=/")],
+                json={
+                    "code": 8821,
+                    "message": "需要安全验证",
+                    "redirectUrl": "https://music.163.com/st/user/gate",
+                },
+            )
+        if request.url.path.endswith("/account/get"):
+            assert "MUSIC_U=gate-session" in request.headers.get("cookie", "")
+            return httpx.Response(
+                200,
+                json={
+                    "code": 200,
+                    "account": {"id": 3},
+                    "profile": {"userId": 3, "nickname": "Gate"},
+                },
+            )
+        raise AssertionError(request.url.path)
+
+    monkeypatch.setattr(
+        "musicdl_web.sessions.netease_qr.qr_svg_data_url",
+        lambda payload: "data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=",
+    )
+    flow = NeteaseQrLoginFlow(transport=httpx.MockTransport(handler))
+    token, _ = flow.begin(Source.NETEASE)
+    result = flow.poll(Source.NETEASE, token)
+    assert result.state is QrLoginState.SUCCEEDED
+    assert result.material is not None
+    flow.discard(Source.NETEASE, token)
+
+
+def test_netease_confirm_8821_without_cookies_fails_with_cookie_import_hint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/unikey"):
+            return httpx.Response(200, json={"code": 200, "unikey": "gate-key-2"})
+        if request.url.path.endswith("/client/login"):
+            return httpx.Response(
+                200,
+                json={
+                    "code": 8821,
+                    "message": "需要安全验证",
+                    "redirectUrl": "https://st.music.163.com/encrypt-pages?qrCode=redacted",
+                },
+            )
+        if request.url.path.startswith("/st/") or "encrypt" in request.url.path:
+            raise AssertionError("cross-host security page must not be fetched")
+        raise AssertionError(request.url.path)
+
+    monkeypatch.setattr(
+        "musicdl_web.sessions.netease_qr.qr_svg_data_url",
+        lambda payload: "data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=",
+    )
+    flow = NeteaseQrLoginFlow(transport=httpx.MockTransport(handler))
+    token, _ = flow.begin(Source.NETEASE)
+    with pytest.raises(QrLoginError, match="导入登录 Cookie"):
+        flow.poll(Source.NETEASE, token)
+    flow.discard(Source.NETEASE, token)
 
 
 def test_netease_confirm_accepts_cookie_field_in_json_body(

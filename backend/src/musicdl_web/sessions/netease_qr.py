@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+import secrets
+import time
 from base64 import b64decode
 from binascii import Error as Base64Error
 from collections.abc import Mapping
@@ -11,6 +13,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -27,6 +30,8 @@ _ACCOUNT_ENDPOINT = "https://music.163.com/api/w/nuser/account/get"
 _LOGIN_URL_PREFIX = "https://music.163.com/login?codekey="
 # type=3 is the modern Web QR challenge used by current Netease web clients.
 _QR_TYPE = "3"
+# Observed after phone confirm when Netease withholds MUSIC_U and returns a gate URL.
+_CONFIRM_REDIRECT_CODE = 8821
 _HEADERS = {
     "Referer": "https://music.163.com/",
     # Browser-like UA: some confirm paths omit session cookies for unknown agents.
@@ -38,6 +43,10 @@ _HEADERS = {
 _TTL = timedelta(minutes=5)
 _DEBUG_LOG = Path("/app/tmp/qr-debug.log")
 _LOG = logging.getLogger("musicdl_web.sessions.netease_qr")
+_SECURITY_GATE_MESSAGE = (
+    "网易云确认后要求额外安全验证，扫码无法在本服务内完成；"
+    "请改用「导入登录 Cookie」"
+)
 
 
 @dataclass(slots=True)
@@ -77,7 +86,9 @@ class NeteaseQrLoginFlow:
             key = root.get("unikey")
             if root.get("code") != 200 or not isinstance(key, str) or not key:
                 raise QrLoginError("Netease QR login is unavailable")
-            payload = f"{_LOGIN_URL_PREFIX}{key}"
+            # Short chainId keeps the QR payload within version-5 capacity while matching
+            # the modern web login URL shape more closely than codekey-only links.
+            payload = f"{_LOGIN_URL_PREFIX}{key}&chainId={_short_chain_id()}"
             image_data_url = qr_svg_data_url(payload)
             image = _decode_svg_data_url(image_data_url)
             token = _NeteaseQrToken(client, key, image, payload)
@@ -115,61 +126,120 @@ class NeteaseQrLoginFlow:
                 return QrFlowResult(QrLoginState.SCANNED)
             if code == 800:
                 return QrFlowResult(QrLoginState.EXPIRED)
-            if code != 803:
-                _debug(
-                    {
-                        "event": "poll_unexpected_code",
-                        "code": code,
-                        "body_keys": sorted(root.keys()),
-                        "body_types": {k: type(v).__name__ for k, v in root.items()},
-                        "set_cookie_names": _set_cookie_names(response),
-                        "jar_names": sorted(client.cookie_mapping().keys()),
-                    }
-                )
-                raise QrLoginError("Netease QR login returned an invalid state")
+            if code == _CONFIRM_REDIRECT_CODE:
+                return self._handle_confirm_redirect(client, response, root)
+            if code == 803:
+                return self._complete_authenticated_session(client, response, root)
 
-            cookies = _merge_session_cookies(client, response, root)
             _debug(
                 {
-                    "event": "poll_803",
+                    "event": "poll_unexpected_code",
+                    "code": code,
+                    "message": _safe_message(root.get("message")),
+                    "redirect": _redact_url(root.get("redirectUrl")),
                     "body_keys": sorted(root.keys()),
                     "body_types": {k: type(v).__name__ for k, v in root.items()},
                     "set_cookie_names": _set_cookie_names(response),
-                    "jar_names": sorted(cookies.keys()),
-                    "has_auth_cookie": not {"MUSIC_A", "MUSIC_U"}.isdisjoint(cookies),
+                    "jar_names": sorted(client.cookie_mapping().keys()),
                 }
             )
-            if {"MUSIC_A", "MUSIC_U"}.isdisjoint(cookies):
-                raise QrLoginError("Netease QR login did not establish a session cookie")
-
-            # Seed the client jar with any header/body cookies httpx did not store, so
-            # the account probe and later adapters share the same session material.
-            _seed_client_cookies(client, cookies)
-
-            account_response = client.get(_ACCOUNT_ENDPOINT)
-            account = _json_mapping(account_response)
-            _debug(
-                {
-                    "event": "account_after_803",
-                    "code": account.get("code"),
-                    "body_types": {k: type(v).__name__ for k, v in account.items()},
-                    "id_types": _account_id_types(account),
-                }
-            )
-            _verify_account(account)
-            cookies = _merge_session_cookies(client, account_response, account)
-            if not cookies or {"MUSIC_A", "MUSIC_U"}.isdisjoint(cookies):
-                raise QrLoginError("Netease account verification failed")
-            return QrFlowResult(
-                QrLoginState.SUCCEEDED,
-                SessionMaterial(source=Source.NETEASE, _cookies=cookies),
-            )
+            raise QrLoginError("Netease QR login returned an invalid state")
         except QrLoginError as exc:
             _debug({"event": "poll_qr_login_error", "error": str(exc)})
             raise
-        except Exception as exc:
-            _debug({"event": "poll_other_error", "error_type": type(exc).__name__})
+        except Exception:
+            _debug({"event": "poll_other_error", "error_type": "Exception"})
             raise QrLoginError("Netease QR login request failed") from None
+
+    def _handle_confirm_redirect(
+        self,
+        client: PlatformCookieJarClient,
+        response: httpx.Response,
+        root: Mapping[str, Any],
+    ) -> QrFlowResult:
+        """Handle post-confirm gate (8821): try same-host finalize, else fail clearly."""
+
+        redirect = root.get("redirectUrl")
+        _debug(
+            {
+                "event": "poll_8821",
+                "message": _safe_message(root.get("message")),
+                "redirect": _redact_url(redirect),
+                "set_cookie_names": _set_cookie_names(response),
+                "jar_names": sorted(client.cookie_mapping().keys()),
+                "body_keys": sorted(root.keys()),
+            }
+        )
+        # Some edges still attach session cookies alongside 8821.
+        cookies = _merge_session_cookies(client, response, root)
+        if not {"MUSIC_A", "MUSIC_U"}.isdisjoint(cookies):
+            return self._complete_authenticated_session(client, response, root)
+
+        if isinstance(redirect, str) and redirect.startswith("https://music.163.com/"):
+            try:
+                finalize = client.get(redirect)
+            except Exception:
+                raise QrLoginError(_SECURITY_GATE_MESSAGE) from None
+            finalize_root: Mapping[str, Any]
+            try:
+                finalize_root = _json_mapping(finalize)
+            except QrLoginError:
+                finalize_root = {}
+            cookies = _merge_session_cookies(client, finalize, finalize_root)
+            _debug(
+                {
+                    "event": "poll_8821_finalize",
+                    "set_cookie_names": _set_cookie_names(finalize),
+                    "jar_names": sorted(cookies.keys()),
+                    "has_auth_cookie": not {"MUSIC_A", "MUSIC_U"}.isdisjoint(cookies),
+                    "body_keys": sorted(finalize_root.keys()) if finalize_root else [],
+                }
+            )
+            if not {"MUSIC_A", "MUSIC_U"}.isdisjoint(cookies):
+                return self._complete_authenticated_session(
+                    client, finalize, finalize_root
+                )
+
+        raise QrLoginError(_SECURITY_GATE_MESSAGE)
+
+    def _complete_authenticated_session(
+        self,
+        client: PlatformCookieJarClient,
+        response: httpx.Response,
+        root: Mapping[str, Any],
+    ) -> QrFlowResult:
+        cookies = _merge_session_cookies(client, response, root)
+        _debug(
+            {
+                "event": "poll_session_complete",
+                "body_keys": sorted(root.keys()),
+                "set_cookie_names": _set_cookie_names(response),
+                "jar_names": sorted(cookies.keys()),
+                "has_auth_cookie": not {"MUSIC_A", "MUSIC_U"}.isdisjoint(cookies),
+            }
+        )
+        if {"MUSIC_A", "MUSIC_U"}.isdisjoint(cookies):
+            raise QrLoginError("Netease QR login did not establish a session cookie")
+
+        _seed_client_cookies(client, cookies)
+        account_response = client.get(_ACCOUNT_ENDPOINT)
+        account = _json_mapping(account_response)
+        _debug(
+            {
+                "event": "account_after_session",
+                "code": account.get("code"),
+                "body_types": {k: type(v).__name__ for k, v in account.items()},
+                "id_types": _account_id_types(account),
+            }
+        )
+        _verify_account(account)
+        cookies = _merge_session_cookies(client, account_response, account)
+        if not cookies or {"MUSIC_A", "MUSIC_U"}.isdisjoint(cookies):
+            raise QrLoginError("Netease account verification failed")
+        return QrFlowResult(
+            QrLoginState.SUCCEEDED,
+            SessionMaterial(source=Source.NETEASE, _cookies=cookies),
+        )
 
     def discard(self, source: Source, temporary_token: object) -> None:
         del source
@@ -345,3 +415,37 @@ def _debug(payload: Mapping[str, Any]) -> None:
     except OSError:
         _LOG.warning("qr debug log unavailable")
     _LOG.warning("qr %s", line)
+
+
+def _short_chain_id() -> str:
+    """Compact chainId that fits the dependency-free QR version-5 payload budget."""
+
+    return f"v1_w{secrets.token_hex(2)}_{int(time.time()) % 100_000_000}"
+
+
+def _safe_message(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text or len(text) > 120:
+        return text[:120] if text else None
+    return text
+
+
+def _redact_url(value: object) -> dict[str, object] | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    parsed = urlsplit(value.strip())
+    return {
+        "scheme": parsed.scheme,
+        "host": (parsed.hostname or "").lower(),
+        "path": parsed.path[:80],
+        "has_query": bool(parsed.query),
+        "query_keys": sorted(
+            {
+                part.split("=", 1)[0]
+                for part in parsed.query.split("&")
+                if part and "=" in part
+            }
+        )[:20],
+    }
