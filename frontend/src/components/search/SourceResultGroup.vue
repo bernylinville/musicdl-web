@@ -54,7 +54,7 @@ const emptyQuality = (): QualityState => ({ status: 'idle', options: [], snapsho
         <tbody>
           <TrackRow
             v-for="track in group.tracks"
-            :key="track.trackId"
+            :key="trackKey(track.source, track.trackId)"
             :track="track"
             :selected="Boolean(selectedTracks[trackKey(track.source, track.trackId)])"
             :quality="qualities[trackKey(track.source, track.trackId)] ?? emptyQuality()"

@@ -135,6 +135,7 @@ async def test_runtime_matches_frontend_api_and_revalidates_exact_tier(
     assert search.groups[0].tracks[0].track_id == "101"
 
     snapshot = runtime.quality_snapshot(Source.NETEASE, "101")
+    # Only tiers whose response level matches the request are listed.
     assert [option.id for option in snapshot.options] == ["standard", "lossless"]
     request = await runtime.prepare_request(
         Source.NETEASE,
@@ -150,6 +151,66 @@ async def test_runtime_matches_frontend_api_and_revalidates_exact_tier(
     assert grant.allowed_hosts == frozenset({"m10.music.126.net"})
     assert "https://" not in repr(grant)
     assert all(request.url.scheme == "https" for request in seen)
+    runtime.close()
+
+
+async def test_runtime_lists_master_and_higher_only_when_platform_echoes_level(
+    tmp_path: Path,
+) -> None:
+    key_file = tmp_path / "session.key"
+    key_file.write_bytes(b"m" * 32)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/w/nuser/account/get":
+            return httpx.Response(
+                200,
+                json={
+                    "code": 200,
+                    "account": {"id": 3},
+                    "profile": {"userId": 3, "nickname": "Master"},
+                },
+            )
+        if request.url.path == "/api/song/enhance/player/url/v1":
+            level = parse_qs(request.content.decode())["level"][0]
+            # hires silently falls back to lossless — must not appear as Hi-Res.
+            actual = "lossless" if level == "hires" else level
+            return httpx.Response(
+                200,
+                json={
+                    "code": 200,
+                    "data": [
+                        {
+                            "id": 303,
+                            "level": actual,
+                            "url": f"http://m10.music.126.net/{actual}",
+                            "size": 9000,
+                            "type": "flac" if actual in {"lossless", "jymaster"} else "mp3",
+                            "freeTrialInfo": None,
+                        }
+                    ],
+                },
+            )
+        raise AssertionError(request.url)
+
+    runtime = ProductionPlatformRuntime(
+        RuntimeSettings(
+            session_key_file=key_file,
+            session_root=tmp_path / "sessions",
+            artwork_root=tmp_path / "artwork",
+        ),
+        transport=httpx.MockTransport(handler),
+    )
+    runtime.import_session(Source.NETEASE, "MUSIC_U=master-session")
+    snapshot = runtime.quality_snapshot(Source.NETEASE, "303")
+    assert [option.id for option in snapshot.options] == [
+        "standard",
+        "higher",
+        "exhigh",
+        "lossless",
+        "jymaster",
+    ]
+    assert "hires" not in {option.id for option in snapshot.options}
+    assert any(option.label == "超清母带" for option in snapshot.options)
     runtime.close()
 
 

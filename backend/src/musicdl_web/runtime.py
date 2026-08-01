@@ -111,6 +111,8 @@ class _ExactResult:
     source_url: str = field(repr=False)
 
 
+# Level ids match Netease player/url/v1. Only list a tier when the response
+# echoes the same level (no silent downgrade). Labels follow the product glossary.
 _NETEASE_TIERS = (
     _NeteaseTier(
         QualityOption(
@@ -121,6 +123,16 @@ _NETEASE_TIERS = (
             codec="mp3",
         ),
         "standard",
+    ),
+    _NeteaseTier(
+        QualityOption(
+            quality_id="higher",
+            label="较高",
+            family=FidelityFamily.LINEAR,
+            rank=int(Quality.HIGH),
+            codec="mp3",
+        ),
+        "high",
     ),
     _NeteaseTier(
         QualityOption(
@@ -151,6 +163,16 @@ _NETEASE_TIERS = (
             codec="flac",
         ),
         "hi_res",
+    ),
+    _NeteaseTier(
+        QualityOption(
+            quality_id="jymaster",
+            label="超清母带",
+            family=FidelityFamily.LINEAR,
+            rank=int(Quality.MASTER),
+            codec="flac",
+        ),
+        "master",
     ),
 )
 

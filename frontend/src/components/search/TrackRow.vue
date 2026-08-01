@@ -23,16 +23,32 @@ const emit = defineEmits<{
 const row = useTemplateRef<HTMLTableRowElement>('row')
 const coverFailed = shallowRef(false)
 let observer: IntersectionObserver | null = null
+let observedTrackKey = ''
+
+function trackIdentity(): string {
+  return `${props.track.source}:${props.track.trackId}`
+}
+
+function requestIfNeeded(): void {
+  if (props.quality.status === 'idle' || props.quality.status === 'session_required') {
+    emit('requestQuality', props.track)
+  }
+}
 
 watch(() => props.track.coverUrl, () => { coverFailed.value = false })
 
-// Selecting a track should always kick off quality confirmation (not only visibility).
+// New search clears qualities to idle but Vue may reuse TrackRow by trackId.
+// Re-request whenever identity or idle status appears again.
+watch(
+  () => [trackIdentity(), props.quality.status] as const,
+  () => { requestIfNeeded() },
+  { immediate: true },
+)
+
 watch(
   () => props.selected,
   (selected) => {
-    if (selected && (props.quality.status === 'idle' || props.quality.status === 'session_required')) {
-      emit('requestQuality', props.track)
-    }
+    if (selected) requestIfNeeded()
   },
 )
 
@@ -51,18 +67,30 @@ const qualityStatusLabel = computed(() => {
 })
 
 onMounted(() => {
-  if (!('IntersectionObserver' in window)) {
-    emit('requestQuality', props.track)
-    return
-  }
+  requestIfNeeded()
+  if (!('IntersectionObserver' in window)) return
   observer = new IntersectionObserver((entries) => {
     if (entries.some((entry) => entry.isIntersecting)) {
-      emit('requestQuality', props.track)
-      observer?.disconnect()
+      requestIfNeeded()
     }
   }, { rootMargin: '100px' })
-  if (row.value) observer.observe(row.value)
+  if (row.value) {
+    observedTrackKey = trackIdentity()
+    observer.observe(row.value)
+  }
 })
+
+watch(
+  () => trackIdentity(),
+  (next) => {
+    if (!observer || !row.value || next === observedTrackKey) return
+    observer.unobserve(row.value)
+    observedTrackKey = next
+    observer.observe(row.value)
+    requestIfNeeded()
+  },
+)
+
 onUnmounted(() => observer?.disconnect())
 </script>
 
