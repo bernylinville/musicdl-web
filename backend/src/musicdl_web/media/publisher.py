@@ -71,7 +71,7 @@ class MediaPublisher:
             request.track.source, request.track.track_id, request.quality
         )
         if not decision.allowed:
-            raise PublishError("same or lower quality is already managed")
+            raise PublishError("曲库已有相同或更高音质，无需重复下载")
 
         self.staging_root.mkdir(parents=True, exist_ok=True)
         stage = Path(tempfile.mkdtemp(prefix="musicdl-tag-", dir=self.staging_root))

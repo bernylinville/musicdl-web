@@ -138,7 +138,7 @@ def create_api_router(
                         failed.id,
                         JobStatus.FAILED,
                         error_code="already_managed",
-                        error_message="same or higher quality is already managed",
+                        error_message="曲库已有相同或更高音质，无需重复下载",
                     )
                     jobs.append(repository.get_job(failed.id) or failed)
                     continue
@@ -198,7 +198,7 @@ def create_api_router(
 
 
 _SAFE_ERROR_MESSAGES = {
-    "already_managed": "same or higher quality is already managed",
+    "already_managed": "曲库已有相同或更高音质，无需重复下载",
     "authorization_rejected": "platform authorization was rejected",
     "empty_body": "platform returned an empty audio file",
     "grant_expired": "download authorization expired",
