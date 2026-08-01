@@ -285,6 +285,66 @@ def test_cookie_jar_skips_empty_values_without_aborting() -> None:
     client.close()
 
 
+def test_cookie_jar_prefers_root_path_when_same_name_conflicts() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers=[
+                ("set-cookie", "MUSIC_U=deep; Path=/api"),
+                ("set-cookie", "MUSIC_U=root; Path=/"),
+            ],
+            json={"code": 803},
+        )
+
+    client = PlatformCookieJarClient(
+        allowed_host="music.163.com", transport=httpx.MockTransport(handler)
+    )
+    client.post("https://music.163.com/api/login/qrcode/client/login", data={"key": "k"})
+    assert client.cookie_mapping()["MUSIC_U"] == "root"
+    client.close()
+
+
+def test_netease_confirm_accepts_cookie_field_in_json_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/unikey"):
+            return httpx.Response(200, json={"code": 200, "unikey": "body-cookie-key"})
+        if request.url.path.endswith("/client/login"):
+            # No Set-Cookie; session only in body — observed on some Netease edges.
+            return httpx.Response(
+                200,
+                json={
+                    "code": 803,
+                    "message": "授权成功",
+                    "cookie": "MUSIC_U=body-session; __csrf=csrf-token",
+                },
+            )
+        if request.url.path.endswith("/account/get"):
+            assert "MUSIC_U=body-session" in request.headers.get("cookie", "")
+            return httpx.Response(
+                200,
+                json={
+                    "code": 200,
+                    "account": {"id": 7},
+                    "profile": {"userId": 7, "nickname": "BodyCookie"},
+                },
+            )
+        raise AssertionError(request.url.path)
+
+    monkeypatch.setattr(
+        "musicdl_web.sessions.netease_qr.qr_svg_data_url",
+        lambda payload: "data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=",
+    )
+    flow = NeteaseQrLoginFlow(transport=httpx.MockTransport(handler))
+    token, _ = flow.begin(Source.NETEASE)
+    result = flow.poll(Source.NETEASE, token)
+    assert result.state is QrLoginState.SUCCEEDED
+    assert result.material is not None
+    assert "MUSIC_U=body-session" in result.material.cookie_header_for(Source.NETEASE)
+    flow.discard(Source.NETEASE, token)
+
+
 def test_qr_cookie_jar_rejects_cross_host_redirects_and_caller_cookie_headers() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(302, headers={"location": "https://evil.example/steal"})

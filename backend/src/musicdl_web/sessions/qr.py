@@ -141,8 +141,13 @@ class QrLoginController:
             raise QrLoginError("QR challenge is no longer active")
         try:
             observation = self._flow.poll(active.public.source, active.token)
-        except Exception:
-            return self._finish(active, QrLoginState.NETWORK_ERROR)
+        except Exception as exc:
+            # Keep operator-safe adapter messages for the API layer; never include secrets.
+            reason = str(exc).strip() if isinstance(exc, QrLoginError) else ""
+            finished = self._finish(active, QrLoginState.NETWORK_ERROR)
+            if reason:
+                return QrObservation(QrLoginState.NETWORK_ERROR, success_result=reason)
+            return finished
         if observation.state not in self._TRANSITIONS.get(active.public.state, set()):
             return self._finish(active, QrLoginState.NETWORK_ERROR)
         if observation.state is QrLoginState.SUCCEEDED:

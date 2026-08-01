@@ -218,10 +218,14 @@ def create_platform_router(service: PlatformService) -> APIRouter:
             return qr_service.poll_qr(source, challenge_id)
         except LookupError:
             raise HTTPException(status_code=404, detail="二维码登录任务已结束") from None
-        except RuntimeError:
+        except RuntimeError as exc:
+            detail = str(exc).strip() or "二维码登录暂时不可用"
+            # Never leak stack-like content; adapter messages are fixed Chinese/English phrases.
+            if len(detail) > 160 or "\n" in detail:
+                detail = "二维码登录暂时不可用"
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="二维码登录暂时不可用",
+                detail=detail,
             ) from None
 
     @router.delete(

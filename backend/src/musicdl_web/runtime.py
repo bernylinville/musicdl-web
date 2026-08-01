@@ -259,7 +259,11 @@ class ProductionPlatformRuntime:
             return QrObservationView(
                 state="success", session=observation.success_result
             )
-        raise RuntimeError("QR login failed")
+        if observation.state is QrLoginState.NETWORK_ERROR and isinstance(
+            observation.success_result, str
+        ) and observation.success_result:
+            raise RuntimeError(observation.success_result)
+        raise RuntimeError("二维码登录暂时不可用")
 
     def cancel_qr(self, source: Source, challenge_id: str) -> None:
         try:
