@@ -37,7 +37,13 @@ export function useQrLogin(api: MusicApi, options: UseQrLoginOptions) {
       if (activeRunId !== runId) return
       state.value = result.state
       if (result.state === 'success') {
-        await options.onSuccess()
+        // Session is already persisted server-side; a refresh/UI failure must not
+        // look like a failed login.
+        try {
+          await options.onSuccess()
+        } catch {
+          /* ignore post-success UI errors */
+        }
         return
       }
       if (result.state === 'expired') return

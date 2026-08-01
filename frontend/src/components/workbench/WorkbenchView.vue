@@ -20,11 +20,22 @@ if (!api) throw new Error('Music API 未注入')
 
 const workbench = useWorkbench(api)
 const preview = usePreview(api)
-const qrLogin = useQrLogin(api, { onSuccess: workbench.refreshSessions })
 const dialogSource = shallowRef<Source | null>(null)
 const dialogMode = shallowRef<'qr' | 'import'>('import')
 const dialogBusy = shallowRef(false)
 const dialogError = shallowRef<string | null>(null)
+
+const qrLogin = useQrLogin(api, {
+  onSuccess: async () => {
+    try {
+      await workbench.refreshSessions()
+    } finally {
+      // Challenge is already terminal on the server; dismiss like Cookie import.
+      dialogSource.value = null
+      dialogError.value = null
+    }
+  },
+})
 
 function openImport(source: Source): void {
   dialogSource.value = source
