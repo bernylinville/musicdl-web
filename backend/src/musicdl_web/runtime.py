@@ -73,7 +73,10 @@ _NETEASE_ACCOUNT_ENDPOINT = "https://music.163.com/api/w/nuser/account/get"
 _NETEASE_MEDIA_HOST = re.compile(r"^m[0-9]+\.music\.126\.net$")
 _NETEASE_HEADERS = {
     "Referer": "https://music.163.com/",
-    "User-Agent": "musicdl-web/0.1",
+    "User-Agent": (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    ),
 }
 
 

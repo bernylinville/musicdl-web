@@ -305,10 +305,19 @@ class PlatformCookieJarClient:
         return self._request("GET", url, data=None, headers=headers)
 
     def cookie_mapping(self) -> dict[str, str]:
+        """Return non-empty jar cookies.
+
+        Platforms sometimes emit empty placeholder Set-Cookie values alongside a valid
+        session cookie. Those empties must not abort the whole jar read after a successful
+        QR confirmation (that path previously surfaced as a generic QR failure).
+        """
+
         cookies: dict[str, str] = {}
         for cookie in self._client.cookies.jar:
-            if not isinstance(cookie.value, str) or not cookie.value:
+            if not isinstance(cookie.value, str):
                 raise NetworkRequestError("platform cookie jar is invalid")
+            if not cookie.value:
+                continue
             if cookie.name in cookies and cookies[cookie.name] != cookie.value:
                 raise NetworkRequestError("platform cookie jar is ambiguous")
             cookies[cookie.name] = cookie.value

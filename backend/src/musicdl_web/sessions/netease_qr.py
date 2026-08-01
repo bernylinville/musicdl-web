@@ -22,9 +22,15 @@ _UNIKEY_ENDPOINT = "https://music.163.com/api/login/qrcode/unikey"
 _POLL_ENDPOINT = "https://music.163.com/api/login/qrcode/client/login"
 _ACCOUNT_ENDPOINT = "https://music.163.com/api/w/nuser/account/get"
 _LOGIN_URL_PREFIX = "https://music.163.com/login?codekey="
+# type=3 is the modern Web QR challenge used by current Netease web clients.
+_QR_TYPE = "3"
 _HEADERS = {
     "Referer": "https://music.163.com/",
-    "User-Agent": "musicdl-web/0.1",
+    # Browser-like UA: some confirm paths omit session cookies for unknown agents.
+    "User-Agent": (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    ),
 }
 _TTL = timedelta(minutes=5)
 
@@ -61,7 +67,7 @@ class NeteaseQrLoginFlow:
             headers=_HEADERS,
         )
         try:
-            response = client.post(_UNIKEY_ENDPOINT, data={"type": "1"})
+            response = client.post(_UNIKEY_ENDPOINT, data={"type": _QR_TYPE})
             root = _json_mapping(response)
             key = root.get("unikey")
             if root.get("code") != 200 or not isinstance(key, str) or not key:
@@ -93,7 +99,9 @@ class NeteaseQrLoginFlow:
         if client is None or key is None:
             raise QrLoginError("Netease QR challenge is inactive")
         try:
-            response = client.post(_POLL_ENDPOINT, data={"key": key, "type": "1"})
+            response = client.post(
+                _POLL_ENDPOINT, data={"key": key, "type": _QR_TYPE}
+            )
             root = _json_mapping(response)
             code = root.get("code")
             if code == 801:
@@ -104,6 +112,12 @@ class NeteaseQrLoginFlow:
                 return QrFlowResult(QrLoginState.EXPIRED)
             if code != 803:
                 raise QrLoginError("Netease QR login returned an invalid state")
+
+            # Prefer jar cookies; also absorb any Set-Cookie the jar accepted on this
+            # response so empty siblings cannot erase a successful confirmation.
+            cookies = client.cookie_mapping()
+            if {"MUSIC_A", "MUSIC_U"}.isdisjoint(cookies):
+                raise QrLoginError("Netease QR login did not establish a session cookie")
 
             account_response = client.get(_ACCOUNT_ENDPOINT)
             account = _json_mapping(account_response)
@@ -170,6 +184,21 @@ def _json_mapping(response: httpx.Response) -> Mapping[str, Any]:
     return root
 
 
+def _positive_id(value: object) -> int | None:
+    """Coerce Netease account identifiers that may arrive as int or numeric string."""
+
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    if isinstance(value, str):
+        text = value.strip()
+        if text.isdigit():
+            parsed = int(text)
+            return parsed if parsed > 0 else None
+    return None
+
+
 def _verify_account(root: Mapping[str, Any]) -> None:
     account = root.get("account")
     profile = root.get("profile")
@@ -177,15 +206,7 @@ def _verify_account(root: Mapping[str, Any]) -> None:
         profile, Mapping
     ):
         raise QrLoginError("Netease account verification failed")
-    account_id = account.get("id")
-    user_id = profile.get("userId")
-    if (
-        not isinstance(account_id, int)
-        or isinstance(account_id, bool)
-        or account_id <= 0
-        or not isinstance(user_id, int)
-        or isinstance(user_id, bool)
-        or user_id <= 0
-        or account_id != user_id
-    ):
+    account_id = _positive_id(account.get("id"))
+    user_id = _positive_id(profile.get("userId"))
+    if account_id is None or user_id is None or account_id != user_id:
         raise QrLoginError("Netease account verification failed")

@@ -86,6 +86,7 @@ class QrLoginController:
             *TERMINAL_QR_STATES,
         },
         QrLoginState.SCANNED: {
+            QrLoginState.WAITING,
             QrLoginState.SCANNED,
             QrLoginState.AWAITING_CONFIRMATION,
             *TERMINAL_QR_STATES,
