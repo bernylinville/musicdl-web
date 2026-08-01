@@ -11,6 +11,7 @@ from musicdl_web.db import Repository
 from musicdl_web.domain import JobRequest, MediaMetadata
 from musicdl_web.domain.models import utc_now
 from musicdl_web.media.publisher import MediaProbe, MediaPublisher, PublishError, TagWriter
+from musicdl_web.media.quality_match import probe_matches_request
 
 
 class DeliveryService:
@@ -51,7 +52,7 @@ class DeliveryService:
         lyrics: str | None = None,
     ) -> Path:
         metadata = self.probe.probe(downloaded)
-        if metadata.quality != request.quality:
+        if not probe_matches_request(request, metadata.quality):
             raise PublishError("downloaded media quality does not match the selected tier")
         directory = self.browser_root / job_id
         directory.mkdir(parents=True, exist_ok=False)
@@ -82,5 +83,5 @@ class DeliveryService:
 
 
 def validate_media(metadata: MediaMetadata, request: JobRequest) -> None:
-    if metadata.quality != request.quality:
+    if not probe_matches_request(request, metadata.quality):
         raise PublishError("media tier mismatch")

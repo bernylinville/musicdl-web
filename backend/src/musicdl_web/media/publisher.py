@@ -13,6 +13,7 @@ from typing import Protocol
 
 from musicdl_web.db import Repository
 from musicdl_web.domain import JobRequest, MediaMetadata
+from musicdl_web.media.quality_match import probe_matches_request
 
 
 class PublishError(RuntimeError):
@@ -58,7 +59,7 @@ class MediaPublisher:
         lyrics: str | None = None,
     ) -> Path:
         before = self.probe.probe(downloaded)
-        if before.quality != request.quality:
+        if not probe_matches_request(request, before.quality):
             raise PublishError("downloaded media quality does not match the selected tier")
         relative = self.relative_path(request, before.extension)
         destination = (self.music_root / relative).resolve()

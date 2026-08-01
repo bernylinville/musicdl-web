@@ -61,6 +61,47 @@ def publisher(tmp_path: Path, repository: Repository) -> MediaPublisher:
     )
 
 
+def test_master_selection_accepts_probed_lossless_or_hi_res(tmp_path: Path) -> None:
+    """Netease 超清母带 is FLAC; ffprobe cannot label it MASTER."""
+
+    class MasterProbe:
+        def probe(self, path: Path) -> MediaMetadata:
+            return MediaMetadata(
+                extension="flac",
+                codec="flac",
+                duration_seconds=200,
+                quality=Quality.HI_RES,
+            )
+
+    repository = Repository(tmp_path / "app.db")
+    media = MediaPublisher(
+        tmp_path / "music",
+        tmp_path / "stage",
+        repository,
+        MasterProbe(),
+        NoopTagger(),
+    )
+    source = tmp_path / "source.flac"
+    source.write_bytes(b"fLaC" + b"x" * 32)
+    job = JobRequest(
+        track=PlatformTrack(
+            source=Source.NETEASE,
+            track_id="167827",
+            title="素颜",
+            artists=("许嵩", "何曼婷"),
+            album="自定义",
+        ),
+        quality=Quality.MASTER,
+        quality_id="jymaster",
+        quality_label="超清母带",
+        quality_snapshot_id="snapshot-master-1234567890",
+        delivery=Delivery.SERVER,
+    )
+    output = media.publish(source, job)
+    assert output.suffix == ".flac"
+    assert output.is_file()
+
+
 def test_path_normalization_sidecars_and_managed_index(tmp_path: Path) -> None:
     repository = Repository(tmp_path / "app.db")
     source = tmp_path / "source.flac"
