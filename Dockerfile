@@ -18,11 +18,15 @@ ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     TZ=Asia/Shanghai
 
-RUN groupadd --gid 1000 musicdl \
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 1000 musicdl \
     && useradd --uid 1000 --gid 1000 --no-create-home --home-dir /app musicdl
 
 WORKDIR /app
 COPY --from=builder --chown=1000:1000 /opt/venv /opt/venv
+COPY --chown=1000:1000 frontend/dist /app/frontend
 
 USER 1000:1000
 EXPOSE 4534

@@ -2,7 +2,7 @@ name: musicdl-web
 
 services:
   musicdl-web:
-    image: ${MUSICDL_WEB_IMAGE:-musicdl-web:0.1.0-spike-20260731}
+    image: ${MUSICDL_WEB_IMAGE:-musicdl-web:0.2.2}
     container_name: musicdl-web
     platform: linux/amd64
     user: "1000:1000"
@@ -20,7 +20,7 @@ services:
       - /data/docker/musicdl-web/data:/app/data
       - /data/docker/musicdl-web/tmp:/app/tmp
       - /data/docker/musicdl-web/secrets/session.key:/run/secrets/session.key:ro
-      - /data/media/music:/music:ro
+      - /data/media/music:/music
     tmpfs:
       - /tmp:size=16m,mode=1777
     logging:

@@ -6,7 +6,6 @@ tests
 spikes
 docs
 frontend/node_modules
-frontend/dist
 data
 tmp
 secrets

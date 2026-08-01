@@ -1,0 +1,29 @@
+{
+  "quality": {
+    "code": 0,
+    "data": {
+      "mid": "fixture-track-mid",
+      "file": {
+        "size_128mp3": 4567890,
+        "size_320mp3": 9876543,
+        "size_flac": 23456789,
+        "size_hires": 0,
+        "size_dolby": 0
+      }
+    }
+  },
+  "exact": {
+    "code": 0,
+    "data": {
+      "sip": ["https://isure.stream.qqmusic.qq.com/"],
+      "midurlinfo": [
+        {
+          "songmid": "fixture-track-mid",
+          "filename": "F000fixture-track-mid.flac",
+          "purl": "redacted/F000fixture-track-mid.flac",
+          "size": 23456789
+        }
+      ]
+    }
+  }
+}

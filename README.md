@@ -2,7 +2,7 @@
 
 musicdl-web 是面向单一操作者的私有自托管音乐获取工作台。它只处理公开可获取内容或操作者本人平台账号当前合法权益内的内容，不提供共享会员、第三方解析、付费墙或 DRM 绕过能力。
 
-项目当前处于双平台纵向 spike 阶段。完整 Vue 工作台、下载队列和 NAS 发布只有在网易云音乐与 QQ 音乐都通过安全门槛后才会展开。
+当前 `0.2.2-20260731` 版本已在 NAS 提供 Vue 工作台、网易云与 QQ 双平台搜索、同源封面代理、会话导入、网易云扫码登录、下载队列、任务历史、服务器入库与浏览器取回两种互斥交付方式。网易云精确音质链路已经实现；QQ 扫码仍明确显示“尚未支持”，QQ 精确音质/下载仍因动态签名缺少现场证据而返回 `503`，因此本版本不能宣称一期全部完成。
 
 ## 当前开发门槛
 
@@ -14,30 +14,43 @@ musicdl-web 是面向单一操作者的私有自托管音乐获取工作台。�
 
 完整范围见 [规格](docs/spec.md)，完成证据见 [验收清单](docs/acceptance.md)，架构决策见 [ADR](docs/adr)。
 
-## 开发环境
+## 已实现功能
 
-需要 Python 3.12、Node.js 24 和 `uv`。当前 spike 可用以下命令验证：
+- 按来源分组搜索网易云与 QQ，支持分页、跨组选择和按需音质查询。
+- 搜索封面通过同源接口代理，原始图片地址不暴露给浏览器；代理只接受有效 JPEG，流式响应上限为 2 MiB，并使用有 TTL 的缓存。单张封面失败时显示占位符，不阻塞搜索或音频交付。
+- 网易云扫码登录使用官方 HTTPS 流程；二维码图片地址保持不透明且响应为 `no-store`，前端每秒轮询，过期后只允许手动刷新。成功后先用同一会话验证账号，再原子替换 AES-GCM 加密会话。
+- 页面“导入登录 Cookie”会实时验证导入内容；验证失败时保留旧会话。Cookie、token、二维码内容和来源 URL 不进入 API、SQLite 或日志。
+- 下载任务使用短期、会话版本绑定的音质快照；下载前重新验证精确档位，失效时明确失败且不静默降级。
+- 有界并发队列支持取消、失败重试、崩溃恢复和历史清理。
+- 服务器保存会在 `ffprobe` 校验后使用 Mutagen 写入标签、封面和歌词，再原子发布到 `/music`；同一份已验证 JPEG 同时写入音频标签和 `cover.jpg`，缺少封面时音频仍成功并显示“音频成功，封面缺失”。浏览器取回不会写入服务器曲库索引。
+
+当前限制：QQ 匿名搜索受上游实时响应影响；QQ 扫码明确尚未支持，QQ 精确音质/下载接口返回 `503`，精确 preview 仍缺少现场证据。网易云二维码启动、SVG 图片、等待态轮询和取消已经在 NAS smoke 中通过，但真实手机扫码与确认仍须操作者现场验证。网易云本人会话精确下载、浏览器取回和 Navidrome 发现同样仍需现场验收。
+
+## 开发与验证
+
+需要 Python 3.12、Node.js 22 或更高版本、`uv` 和 pnpm 11。执行完整发布门禁：
 
 ```bash
 uv sync
-uv run pytest
-uv run ruff check .
-uv run mypy
-uv run python spikes/search_probe.py --source both --query 周杰伦 --limit 2
+pnpm --dir frontend install --frozen-lockfile
+scripts/verify_release.sh
 ```
+
+当前发布证据为后端 163 项测试、前端 20 项测试，以及 Ruff、mypy、前端 typecheck/lint、生产构建、安全检查、Compose 校验和容器 smoke 全部通过。详细结果见 [adversarial 验收记录](docs/verification/2026-07-31-adversarial.md)。
 
 本目录中的 `musicdl/` 仅为上游只读参考检出，已从版本控制和容器构建上下文排除。
 
-## 只读状态服务
+## NAS 发布
 
-当前可部署的容器只提供 spike 状态页和健康检查，不包含下载入口：
+当前部署入口：<http://192.168.50.10:4534>
 
 ```bash
-docker compose up --build -d
-curl http://127.0.0.1:4534/healthz
+curl -fsS http://192.168.50.10:4534/healthz
 ```
 
-NAS 部署使用 `.env.example` 中的 `/data/docker/musicdl-web` 路径约定。音乐库以只读方式挂载；会话密钥仅预留挂载，当前状态服务不会读取它。
+NAS 运行镜像为 `musicdl-web:0.2.2-20260731`（`linux/amd64`），归档位于 `/data/docker/musicdl-web/releases/musicdl-web_0.2.2-20260731_linux-amd64.tar`，SHA-256 为 `acc5d9ab10af45b44ec294401d065c238e638ce4f4ebdb6f725e2ccfad9af436`。容器健康；上一版 `0.2.1` 镜像、归档和配置备份仍保留作为回滚输入。Navidrome 的容器 ID、启动时间和重启次数未变，本次发布没有修改或重启 Navidrome。容器以 `1000:1000` 运行，根文件系统只读，`/music` 单独读写挂载，并启用 capability drop 与 `no-new-privileges`。部署说明见 [NAS README](deploy/nas/README.md)。
+
+平台凭据只能由操作者在工作台页面导入。不要通过聊天、命令参数或日志传递 Cookie/token；API 和 SQLite 也不得保存这些秘密。
 
 ## 许可与免责声明
 

@@ -19,27 +19,17 @@ async def test_healthz_reports_healthy() -> None:
     assert response.json() == {"status": "healthy"}
 
 
-async def test_status_page_explains_current_gate_in_simplified_chinese() -> None:
+async def test_root_serves_the_built_workbench_instead_of_the_spike_page() -> None:
     async with make_client() as client:
         response = await client.get("/")
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
     assert '<html lang="zh-CN">' in response.text
-    for statement in (
-        "当前仅提供搜索 spike",
-        "17+ 项测试",
-        "网易云音乐",
-        "QQ 音乐",
-        "QQ live volatile",
-        "实际音质清单",
-        "精确单档解析",
-        "合法短试听",
-        "账号权益路径",
-        "不能执行下载",
-        "下一门槛",
-    ):
-        assert statement in response.text
+    assert '<div id="app"></div>' in response.text
+    assert "下载工作台" in response.text
+    assert "只读状态页" not in response.text
+    assert "当前仅提供搜索 spike" not in response.text
 
 
 async def test_service_exposes_no_download_or_schema_endpoints() -> None:

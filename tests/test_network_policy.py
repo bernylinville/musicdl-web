@@ -80,6 +80,43 @@ def test_caller_supplied_cookie_header_is_removed() -> None:
     )
 
 
+def test_get_uses_the_same_https_and_cookie_boundary() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert "cookie" not in request.headers
+        return httpx.Response(200, content=b"image")
+
+    client = PlatformHttpClient(
+        allowed_hosts={"p1.music.126.net"}, transport=httpx.MockTransport(handler)
+    )
+
+    response = client.get(
+        "https://p1.music.126.net/cover.jpg",
+        headers={"Cookie": "shared=must-not-be-sent"},
+    )
+
+    assert response.content == b"image"
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        httpx.Response(200, stream=httpx.ByteStream(b"123456")),
+        httpx.Response(200, headers={"content-length": "6"}, content=b"123456"),
+    ],
+)
+def test_limited_get_stops_oversized_responses_before_returning(
+    response: httpx.Response,
+) -> None:
+    client = PlatformHttpClient(
+        allowed_hosts={"p1.music.126.net"},
+        transport=httpx.MockTransport(lambda request: response),
+    )
+
+    with pytest.raises(NetworkRequestError, match="size limit"):
+        client.get_limited("https://p1.music.126.net/cover.jpg", max_bytes=5)
+
+
 def test_http_failure_is_sanitized() -> None:
     client = PlatformHttpClient(
         allowed_hosts={"music.163.com"},

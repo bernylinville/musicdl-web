@@ -1,0 +1,27 @@
+{
+  "quality": {
+    "code": 200,
+    "data": [
+      {
+        "id": 101,
+        "qualities": [
+          {"level": "standard", "available": true},
+          {"level": "lossless", "available": true},
+          {"level": "hires", "available": false}
+        ]
+      }
+    ]
+  },
+  "exact": {
+    "code": 200,
+    "data": [
+      {
+        "id": 101,
+        "level": "lossless",
+        "url": "https://m10.music.126.net/redacted/audio.flac",
+        "type": "flac",
+        "size": 12345678
+      }
+    ]
+  }
+}

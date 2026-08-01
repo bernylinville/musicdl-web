@@ -2,14 +2,26 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
+from datetime import UTC, datetime, timedelta
 from typing import Any
+from urllib.parse import urljoin
 
 import httpx
 
 from ..errors import PlatformResponseError
 from ..models import SearchResults, Source, Track
 from ..network import PlatformHttpClient
+from ..platforms.errors import CapabilityUnavailable, ExactQualityMismatch
+from ..platforms.quality import (
+    DownloadGrant,
+    FidelityFamily,
+    QualityBinding,
+    QualityOption,
+    QualitySnapshot,
+    QualitySnapshotStore,
+)
 from ._shared import normalize_cover_url, require_list, require_mapping, require_string
 
 
@@ -71,6 +83,139 @@ class QQAdapter:
     @property
     def accessed_hosts(self) -> tuple[str, ...]:
         return self._http.accessed_hosts
+
+
+class QQCapabilityParser:
+    """Strict parser for QQ's observed per-track file capability shape."""
+
+    _FILE_OPTIONS = (
+        (
+            "size_128mp3",
+            QualityOption(
+                quality_id="M500", label="标准", family=FidelityFamily.LINEAR, rank=10
+            ),
+        ),
+        (
+            "size_320mp3",
+            QualityOption(
+                quality_id="M800", label="高品质", family=FidelityFamily.LINEAR, rank=30
+            ),
+        ),
+        (
+            "size_flac",
+            QualityOption(
+                quality_id="F000", label="无损", family=FidelityFamily.LINEAR, rank=40
+            ),
+        ),
+        (
+            "size_hires",
+            QualityOption(
+                quality_id="RS01", label="Hi-Res", family=FidelityFamily.LINEAR, rank=50
+            ),
+        ),
+        (
+            "size_dolby",
+            QualityOption(quality_id="D00A", label="杜比", family=FidelityFamily.DOLBY),
+        ),
+    )
+
+    def __init__(
+        self,
+        snapshots: QualitySnapshotStore,
+        *,
+        capability_enabled: bool = False,
+        approved_media_hosts: frozenset[str] = frozenset(),
+    ) -> None:
+        if any(
+            re.fullmatch(r"[a-z0-9-]+\.stream\.qqmusic\.qq\.com", host) is None
+            for host in approved_media_hosts
+        ):
+            raise ValueError("approved QQ media host is invalid")
+        self._snapshots = snapshots
+        self._capability_enabled = capability_enabled
+        self._approved_media_hosts = approved_media_hosts
+
+    def parse_quality_snapshot(
+        self,
+        payload: Any,
+        *,
+        track_id: str,
+        session_version: int,
+        now: datetime | None = None,
+    ) -> QualitySnapshot:
+        if not self._capability_enabled:
+            raise CapabilityUnavailable("qq quality capability is unavailable")
+        root = require_mapping(payload, Source.QQ, "invalid quality response")
+        if root.get("code") != 0:
+            raise CapabilityUnavailable("qq quality capability is unavailable")
+        data = require_mapping(root.get("data"), Source.QQ, "missing quality data")
+        if require_string(data.get("mid"), Source.QQ, "missing track mid") != track_id:
+            raise CapabilityUnavailable("qq track capability is unavailable")
+        file_info = require_mapping(data.get("file"), Source.QQ, "missing file capability")
+        options: list[QualityOption] = []
+        for field_name, option in self._FILE_OPTIONS:
+            size = file_info.get(field_name, 0)
+            if not isinstance(size, int) or isinstance(size, bool) or size < 0:
+                raise PlatformResponseError(Source.QQ, "invalid quality size")
+            if size > 0:
+                options.append(option)
+        if not options:
+            raise CapabilityUnavailable("qq quality capability is unavailable")
+        return self._snapshots.create(
+            source=Source.QQ,
+            track_id=track_id,
+            session_version=session_version,
+            options=tuple(options),
+            now=now,
+        )
+
+    def parse_exact_response(
+        self,
+        payload: Any,
+        binding: QualityBinding,
+        *,
+        now: datetime | None = None,
+    ) -> DownloadGrant:
+        if not self._capability_enabled or not self._approved_media_hosts:
+            raise CapabilityUnavailable("qq exact resolution is unavailable")
+        if binding.source is not Source.QQ:
+            raise ExactQualityMismatch("quality binding belongs to another platform")
+        root = require_mapping(payload, Source.QQ, "invalid exact response")
+        if root.get("code") != 0:
+            raise CapabilityUnavailable("qq exact resolution is unavailable")
+        data = require_mapping(root.get("data"), Source.QQ, "missing exact data")
+        sip = require_list(data.get("sip"), Source.QQ, "missing exact host")
+        infos = require_list(data.get("midurlinfo"), Source.QQ, "missing exact entry")
+        if len(sip) != 1 or len(infos) != 1:
+            raise PlatformResponseError(Source.QQ, "exact response must contain one location")
+        base = require_string(sip[0], Source.QQ, "invalid exact host")
+        info = require_mapping(infos[0], Source.QQ, "invalid exact entry")
+        if require_string(info.get("songmid"), Source.QQ, "missing track mid") != binding.track_id:
+            raise ExactQualityMismatch("qq returned a different track")
+        filename = require_string(info.get("filename"), Source.QQ, "missing exact filename")
+        actual = filename[:4]
+        if actual != binding.option.quality_id:
+            raise ExactQualityMismatch("qq returned a different quality")
+        purl = require_string(info.get("purl"), Source.QQ, "missing exact location")
+        if not purl or purl.startswith(("//", "/")):
+            raise PlatformResponseError(Source.QQ, "invalid exact path")
+        source_url = urljoin(base.rstrip("/") + "/", purl)
+        _require_qq_https_url(source_url, self._approved_media_hosts)
+        size = info.get("size")
+        if not isinstance(size, int) or isinstance(size, bool) or size <= 0:
+            raise PlatformResponseError(Source.QQ, "invalid exact size")
+        current = now or datetime.now(UTC)
+        return DownloadGrant(
+            source=Source.QQ,
+            track_id=binding.track_id,
+            quality_id=actual,
+            quality_rank=binding.option.rank,
+            expires_at=current + timedelta(minutes=2),
+            allowed_hosts=self._approved_media_hosts,
+            _source_url=source_url,
+            content_type="audio/flac" if actual in {"F000", "RS01"} else "audio/mpeg",
+            expected_bytes=size,
+        )
 
 
 def _map_track(value: Any) -> Track:
@@ -136,3 +281,18 @@ def _has_more(
     if isinstance(next_page, int) and not isinstance(next_page, bool):
         return next_page > page
     return False
+
+
+def _require_qq_https_url(value: str, allowed_hosts: frozenset[str]) -> None:
+    from urllib.parse import urlsplit
+
+    parsed = urlsplit(value)
+    host = parsed.hostname.lower() if parsed.hostname else ""
+    if (
+        parsed.scheme != "https"
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.port not in (None, 443)
+        or host not in allowed_hosts
+    ):
+        raise PlatformResponseError(Source.QQ, "exact location is not platform-owned")

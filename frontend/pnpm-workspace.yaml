@@ -1,0 +1,25 @@
+packages:
+  - .
+
+allowBuilds:
+  esbuild: true
+
+minimumReleaseAge: 1440
+minimumReleaseAgeExclude:
+  - vue
+  - vite
+  - vitest
+  - vue-tsc
+  - typescript
+  - eslint
+  - eslint-plugin-vue
+  - typescript-eslint
+  - '@eslint/js'
+  - '@vitejs/plugin-vue'
+  - '@vitest/coverage-v8'
+  - '@testing-library/vue'
+  - '@testing-library/jest-dom'
+  - '@vue/tsconfig'
+  - jsdom
+  - vue-eslint-parser
+  - '@vue/language-core'

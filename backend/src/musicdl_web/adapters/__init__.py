@@ -1,6 +1,6 @@
 """Platform search adapters."""
 
-from .netease import NeteaseAdapter
-from .qq import QQAdapter
+from .netease import NeteaseAdapter, NeteaseCapabilityParser
+from .qq import QQAdapter, QQCapabilityParser
 
-__all__ = ["NeteaseAdapter", "QQAdapter"]
+__all__ = ["NeteaseAdapter", "NeteaseCapabilityParser", "QQAdapter", "QQCapabilityParser"]
