@@ -9,6 +9,7 @@ defineProps<{
   selectedTracks: Readonly<Record<string, Track>>
   qualities: Readonly<Record<string, QualityState>>
   selectedQualityIds: Readonly<Record<string, string>>
+  rowDownloadKeys: Readonly<Record<string, true>>
   previewKey: string | null
   previewState: 'idle' | 'loading' | 'playing' | 'unavailable'
 }>()
@@ -18,6 +19,7 @@ const emit = defineEmits<{
   requestQuality: [track: Track, force?: boolean]
   selectQuality: [track: Track, qualityId: string]
   preview: [track: Track]
+  download: [track: Track]
   loadMore: []
   openArtist: [source: Track['source'], artistId: string, title: string]
   openAlbum: [source: Track['source'], albumId: string, title: string]
@@ -52,7 +54,8 @@ const emptyQuality = (): QualityState => ({ status: 'idle', options: [], snapsho
             <th>时长</th>
             <th>音乐库</th>
             <th>当前可选音质</th>
-            <th>确认</th>
+            <th>试听</th>
+            <th>下载</th>
           </tr>
         </thead>
         <tbody>
@@ -63,12 +66,14 @@ const emptyQuality = (): QualityState => ({ status: 'idle', options: [], snapsho
             :selected="Boolean(selectedTracks[trackKey(track.source, track.trackId)])"
             :quality="qualities[trackKey(track.source, track.trackId)] ?? emptyQuality()"
             :selected-quality-id="selectedQualityIds[trackKey(track.source, track.trackId)] ?? null"
+            :downloading="Boolean(rowDownloadKeys[trackKey(track.source, track.trackId)])"
             :preview-active="previewKey === trackKey(track.source, track.trackId)"
             :preview-state="previewState"
             @toggle="emit('toggle', $event)"
             @request-quality="(item, force) => emit('requestQuality', item, force)"
             @select-quality="(item, qualityId) => emit('selectQuality', item, qualityId)"
             @preview="emit('preview', $event)"
+            @download="emit('download', $event)"
             @open-artist="(source, artistId, title) => emit('openArtist', source, artistId, title)"
             @open-album="(source, albumId, title) => emit('openAlbum', source, albumId, title)"
             @set-liked="(track, liked) => emit('setLiked', track, liked)"
@@ -93,7 +98,7 @@ const emptyQuality = (): QualityState => ({ status: 'idle', options: [], snapsho
 .source-qq { background: #e5a829; }
 .result-count, .page-label { color: var(--muted); font-size: 11px; }
 .table-scroll { overflow-x: auto; }
-table { width: 100%; min-width: 880px; border-collapse: collapse; table-layout: fixed; }
+table { width: 100%; min-width: 960px; border-collapse: collapse; table-layout: fixed; }
 thead { background: var(--canvas-subtle); }
 th { height: 31px; padding: 0 8px; color: var(--muted); font-size: 10px; font-weight: 600; text-align: left; text-transform: uppercase; letter-spacing: .04em; }
 .select-heading { width: 32px; }

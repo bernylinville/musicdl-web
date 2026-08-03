@@ -115,6 +115,11 @@ function togglePreview(track: Track): void {
         />
 
         <p v-if="workbench.searchMessage.value" class="inline-error" role="alert">{{ workbench.searchMessage.value }}</p>
+        <p
+          v-if="workbench.submitMessage.value && !workbench.selectedCount.value"
+          :class="['download-status', { error: workbench.submitState.value === 'error' }]"
+          role="status"
+        >{{ workbench.submitMessage.value }}</p>
 
         <div v-if="workbench.groups.value.length" class="result-stack">
           <SourceResultGroup
@@ -124,12 +129,14 @@ function togglePreview(track: Track): void {
             :selected-tracks="workbench.selectedTracks.value"
             :qualities="workbench.qualities.value"
             :selected-quality-ids="workbench.selectedQualityIds.value"
+            :row-download-keys="workbench.rowDownloadKeys.value"
             :preview-key="preview.activeKey.value"
             :preview-state="preview.state.value"
             @toggle="workbench.toggleTrack"
             @request-quality="workbench.requestQuality"
             @select-quality="workbench.setQuality"
             @preview="togglePreview"
+            @download="workbench.downloadTrack"
             @load-more="workbench.loadMore(group.source)"
             @open-artist="(source, artistId, title) => workbench.openArtist(source, artistId, title)"
             @open-album="(source, albumId, title) => workbench.openAlbum(source, albumId, title)"
@@ -208,4 +215,18 @@ function togglePreview(track: Track): void {
 .boundary-note strong { color: var(--text); }
 .boundary-note p { margin: 5px 0 0; }
 .inline-error { margin: 10px 0 0; }
+.download-status {
+  margin: 10px 0 0;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--success) 35%, var(--line));
+  border-radius: 7px;
+  color: var(--success);
+  background: var(--success-soft, color-mix(in srgb, var(--success) 12%, var(--surface)));
+  font-size: 12px;
+}
+.download-status.error {
+  border-color: color-mix(in srgb, var(--danger) 35%, var(--line));
+  color: var(--danger);
+  background: var(--danger-soft);
+}
 </style>

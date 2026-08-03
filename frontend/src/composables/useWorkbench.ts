@@ -74,6 +74,7 @@ export function useWorkbench(api: MusicApi) {
   const submitState = shallowRef<'idle' | 'submitting' | 'success' | 'error'>('idle')
   const submitMessage = shallowRef<string | null>(null)
   const operationMessage = shallowRef<string | null>(null)
+  const rowDownloadKeys = shallowRef<Record<string, true>>({})
   let taskTimer: ReturnType<typeof setInterval> | null = null
 
   const selectedCount = computed(() => Object.keys(selectedTracks.value).length)
@@ -273,37 +274,105 @@ export function useWorkbench(api: MusicApi) {
     selectedQualityIds.value = { ...selectedQualityIds.value, [key]: preferred }
   }
 
-  async function requestQuality(track: Track, force = false): Promise<void> {
+  async function requestQuality(track: Track, force = false): Promise<QualityState> {
     const key = trackKey(track.source, track.trackId)
     const current = qualities.value[key]
     if (!force && current && current.status !== 'idle' && current.status !== 'stale') {
       if (current.status === 'ready') ensurePreferredQuality(key, current.options)
-      return
+      return current
     }
     const session = sessions.value.find((item) => item.source === track.source)
     if (!force && session && ['anonymous', 'expired'].includes(session.state)) {
-      qualities.value = {
-        ...qualities.value,
-        [key]: { status: 'session_required', options: [], snapshotId: null, message: '需要有效的平台会话' },
+      const blocked: QualityState = {
+        status: 'session_required',
+        options: [],
+        snapshotId: null,
+        message: '需要有效的平台会话',
       }
-      return
+      qualities.value = { ...qualities.value, [key]: blocked }
+      return blocked
     }
     qualities.value = { ...qualities.value, [key]: { status: 'loading', options: [], snapshotId: null, message: null } }
     try {
       const snapshot = await api.getQualities(track.source, track.trackId)
       if (Date.parse(snapshot.expiresAt) <= Date.now()) {
-        qualities.value = { ...qualities.value, [key]: { status: 'stale', options: [], snapshotId: null, message: '音质选项已过期，请重新获取' } }
+        const stale: QualityState = {
+          status: 'stale',
+          options: [],
+          snapshotId: null,
+          message: '音质选项已过期，请重新获取',
+        }
+        qualities.value = { ...qualities.value, [key]: stale }
+        return stale
+      }
+      const next: QualityState = snapshot.options.length
+        ? {
+            status: 'ready',
+            options: snapshot.options,
+            snapshotId: snapshot.snapshotId,
+            expiresAt: snapshot.expiresAt,
+            message: null,
+          }
+        : {
+            status: 'unavailable',
+            options: [],
+            snapshotId: null,
+            message: '当前会话没有可获取音质',
+          }
+      qualities.value = { ...qualities.value, [key]: next }
+      if (next.status === 'ready') ensurePreferredQuality(key, next.options)
+      return next
+    } catch (error) {
+      const failed = qualityError(error)
+      qualities.value = { ...qualities.value, [key]: failed }
+      return failed
+    }
+  }
+
+  async function downloadTrack(track: Track): Promise<void> {
+    const key = trackKey(track.source, track.trackId)
+    if (rowDownloadKeys.value[key]) return
+    rowDownloadKeys.value = { ...rowDownloadKeys.value, [key]: true }
+    operationMessage.value = null
+    try {
+      let quality = await requestQuality(track)
+      if (quality.status === 'stale') quality = await requestQuality(track, true)
+      if (quality.status !== 'ready') {
+        operationMessage.value = quality.message ?? `无法下载「${track.title}」：音质不可用`
         return
       }
-      qualities.value = {
-        ...qualities.value,
-        [key]: snapshot.options.length
-          ? { status: 'ready', options: snapshot.options, snapshotId: snapshot.snapshotId, expiresAt: snapshot.expiresAt, message: null }
-          : { status: 'unavailable', options: [], snapshotId: null, message: '当前会话没有可获取音质' },
+      if (Date.parse(quality.expiresAt) <= Date.now()) {
+        quality = await requestQuality(track, true)
+        if (quality.status !== 'ready') {
+          operationMessage.value = quality.message ?? `无法下载「${track.title}」：音质已过期`
+          return
+        }
       }
-      if (snapshot.options.length) ensurePreferredQuality(key, snapshot.options)
+      ensurePreferredQuality(key, quality.options)
+      const qualityId = selectedQualityIds.value[key]
+      if (!qualityId) {
+        operationMessage.value = `无法下载「${track.title}」：没有可用音质`
+        return
+      }
+      const created = await api.createBatch({
+        delivery: delivery.value,
+        items: [{
+          source: track.source,
+          trackId: track.trackId,
+          qualityId,
+          qualitySnapshotId: quality.snapshotId,
+        }],
+      })
+      activeTasks.value = [...created, ...activeTasks.value]
+      const label = quality.options.find((option) => option.id === qualityId)?.label
+      submitState.value = 'success'
+      submitMessage.value = `已加入队列：${track.title}${label ? ` · ${label}` : ''}`
     } catch (error) {
-      qualities.value = { ...qualities.value, [key]: qualityError(error) }
+      operationMessage.value = error instanceof Error ? error.message : `下载「${track.title}」失败`
+    } finally {
+      const next = { ...rowDownloadKeys.value }
+      delete next[key]
+      rowDownloadKeys.value = next
     }
   }
 
@@ -434,6 +503,7 @@ export function useWorkbench(api: MusicApi) {
     submitState: shallowReadonly(submitState),
     submitMessage: shallowReadonly(submitMessage),
     operationMessage: shallowReadonly(operationMessage),
+    rowDownloadKeys: shallowReadonly(rowDownloadKeys),
     selectedCount,
     readyCount,
     search,
@@ -443,6 +513,7 @@ export function useWorkbench(api: MusicApi) {
     setTrackLiked,
     loadMore,
     requestQuality,
+    downloadTrack,
     toggleTrack,
     setQuality,
     clearSelection,

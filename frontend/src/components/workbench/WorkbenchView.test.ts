@@ -48,6 +48,33 @@ describe('WorkbenchView', () => {
     }))
   })
 
+  it('downloads from the row without multi-select, using preferred quality and delivery', async () => {
+    const createBatch = vi.fn().mockResolvedValue([{
+      id: 'task-inline',
+      track: { source: 'netease', trackId: '186016', title: '晴天', artists: ['周杰伦'] },
+      qualityLabel: '无损',
+      delivery: 'server',
+      stage: 'queued',
+      progress: 0,
+      error: null,
+      warning: null,
+      browserFileUrl: null,
+      createdAt: '2026-08-03T00:00:00Z',
+    }])
+    const screen = renderWorkbench(createMockApi({ createBatch }))
+    await fireEvent.update(screen.getByRole('searchbox', { name: '搜索词' }), '晴天')
+    await fireEvent.click(screen.getByRole('button', { name: '搜索' }))
+
+    const download = await screen.findByRole('button', { name: /晴天 · 下载/ })
+    await fireEvent.click(download)
+
+    await waitFor(() => expect(createBatch).toHaveBeenCalledWith({
+      delivery: 'server',
+      items: [{ source: 'netease', trackId: '186016', qualityId: 'lossless', qualitySnapshotId: 'snapshot-1' }],
+    }))
+    expect(await screen.findByText(/已加入队列：晴天/)).toBeInTheDocument()
+  })
+
   it('never presents API failure as an available feature', async () => {
     const unavailable = new ApiError('服务仍是旧状态页', 404, 'request_failed')
     const api = createMockApi({

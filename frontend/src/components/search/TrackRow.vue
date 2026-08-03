@@ -11,6 +11,7 @@ const props = defineProps<{
   selectedQualityId: string | null
   previewActive: boolean
   previewState: 'idle' | 'loading' | 'playing' | 'unavailable'
+  downloading: boolean
 }>()
 
 const emit = defineEmits<{
@@ -18,6 +19,7 @@ const emit = defineEmits<{
   requestQuality: [track: Track, force?: boolean]
   selectQuality: [track: Track, qualityId: string]
   preview: [track: Track]
+  download: [track: Track]
   openArtist: [source: Track['source'], artistId: string, title: string]
   openAlbum: [source: Track['source'], albumId: string, title: string]
   setLiked: [track: Track, liked: boolean]
@@ -110,6 +112,39 @@ const qualityStatusLabel = computed(() => {
   if (props.quality.status === 'idle') return '等待确认'
   if (props.quality.status === 'ready') return null
   return props.quality.message
+})
+
+const preferredQualityLabel = computed(() => {
+  if (props.quality.status !== 'ready') return null
+  const selected = props.selectedQualityId
+    ? props.quality.options.find((option) => option.id === props.selectedQualityId)
+    : null
+  if (selected) return selected.label
+  return props.quality.options[props.quality.options.length - 1]?.label ?? null
+})
+
+const downloadLabel = computed(() => {
+  if (props.downloading) return '加入中…'
+  if (props.quality.status === 'loading') return '确认中…'
+  if (props.quality.status === 'session_required') return '需登录'
+  if (props.quality.status === 'unavailable' || props.quality.status === 'stale') return '不可下'
+  return '下载'
+})
+
+const downloadTitle = computed(() => {
+  if (props.downloading) return '正在加入下载队列'
+  if (props.quality.status === 'session_required') return '需要有效的平台会话'
+  if (props.quality.status === 'unavailable') return props.quality.message ?? '当前不可下载'
+  if (props.quality.status === 'stale') return '音质已过期，点击重试确认后再下载'
+  if (preferredQualityLabel.value) return `下载（${preferredQualityLabel.value}）· 使用当前交付方式`
+  return '下载：自动确认最高可用音质'
+})
+
+const downloadDisabled = computed(() => {
+  if (props.downloading) return true
+  if (props.quality.status === 'session_required') return true
+  if (props.quality.status === 'unavailable') return true
+  return false
 })
 
 onMounted(() => {
@@ -221,6 +256,18 @@ onUnmounted(() => observer?.disconnect())
         {{ previewLabel }}
       </button>
     </td>
+    <td class="download-cell">
+      <button
+        class="button button-primary download-button"
+        type="button"
+        :disabled="downloadDisabled"
+        :title="downloadTitle"
+        :aria-label="`${track.title} · ${downloadTitle}`"
+        @click="emit('download', track)"
+      >
+        {{ downloadLabel }}
+      </button>
+    </td>
   </tr>
 </template>
 
@@ -285,4 +332,6 @@ td { height: 54px; padding: 6px 8px; vertical-align: middle; font-size: 12px; }
 .quality-state .error { color: var(--danger); }
 .preview-cell { width: 92px; }
 .preview-button { width: 100%; padding-inline: 7px; }
+.download-cell { width: 72px; }
+.download-button { width: 100%; min-width: 0; padding-inline: 6px; font-size: 11px; }
 </style>
