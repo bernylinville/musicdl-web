@@ -90,6 +90,27 @@ def test_artwork_proxy_accepts_png_by_magic_bytes(tmp_path: Path) -> None:
     assert artwork.body == png
 
 
+def test_artwork_proxy_accepts_large_netease_png_under_10mib(tmp_path: Path) -> None:
+    # Regression: 泪桥 full-res cover is ~5.9 MiB PNG (failed at previous 5 MiB cap).
+    filler = b"\x00" * (6 * 1024 * 1024)
+    png = b"\x89PNG\r\n\x1a\n" + filler + b"\x00\x00\x00\x00IEND\xaeB`\x82"
+    proxy = ArtworkProxy(
+        tmp_path,
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200, headers={"content-type": "image/jpg"}, content=png
+            )
+        ),
+    )
+
+    artwork = proxy.fetch(
+        Source.NETEASE, "156736", "https://p2.music.126.net/large-cover.jpg"
+    )
+
+    assert artwork.content_type == "image/png"
+    assert len(artwork.body) == len(png)
+
+
 @pytest.mark.parametrize(
     ("content_type", "body"),
     [
@@ -97,7 +118,7 @@ def test_artwork_proxy_accepts_png_by_magic_bytes(tmp_path: Path) -> None:
         ("image/png", b"\x89PNG\r\n"),
         ("image/webp", b"RIFFxxxxWEBP"),
         ("image/jpeg", b"not-a-jpeg"),
-        ("image/jpeg", b"\xff\xd8\xff" + b"x" * (5 * 1024 * 1024) + b"\xff\xd9"),
+        ("image/jpeg", b"\xff\xd8\xff" + b"x" * (10 * 1024 * 1024) + b"\xff\xd9"),
     ],
 )
 def test_artwork_proxy_rejects_invalid_responses(

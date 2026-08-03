@@ -34,8 +34,9 @@ class _MemoryEntry:
 
 
 class ArtworkProxy:
-    # Netease album art is often multi-megabyte PNG; keep a firm upper bound.
-    _MAX_BYTES = 5 * 1024 * 1024
+    # Netease full-resolution album art is often multi-megabyte PNG (observed
+    # 泪桥 ~5.9 MiB). 5 MiB rejected real covers; 10 MiB still bounds abuse.
+    _MAX_BYTES = 10 * 1024 * 1024
     _HOST_SUFFIXES = {
         Source.NETEASE: ("music.126.net",),
         Source.QQ: ("y.gtimg.cn",),
