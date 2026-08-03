@@ -53,6 +53,13 @@ class SessionMaterial:
             raise ValueError("session material belongs to a different platform")
         return "; ".join(f"{name}={value}" for name, value in self._cookies.items())
 
+    def cookie_mapping_for(self, source: Source) -> dict[str, str]:
+        """Return a cookie map only to an adapter bound to the same platform."""
+
+        if source is not self.source:
+            raise ValueError("session material belongs to a different platform")
+        return dict(self._cookies)
+
     def secret_payload(self) -> dict[str, object]:
         """Return a persistence-only payload; callers must never log it."""
 

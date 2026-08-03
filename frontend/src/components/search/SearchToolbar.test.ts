@@ -6,7 +6,7 @@ import SearchToolbar from './SearchToolbar.vue'
 describe('SearchToolbar', () => {
   it('has labelled search and mutually exclusive source controls', async () => {
     const screen = render(SearchToolbar, {
-      props: { query: '', source: 'all', loading: false },
+      props: { query: '', source: 'all', loading: false, likedEnabled: true, likedActive: false },
     })
 
     await fireEvent.update(screen.getByRole('searchbox', { name: '搜索词' }), '晴天 周杰伦')
@@ -16,5 +16,14 @@ describe('SearchToolbar', () => {
     expect(screen.emitted()['update:query']?.[0]).toEqual(['晴天 周杰伦'])
     expect(screen.emitted()['update:source']?.[0]).toEqual(['qq'])
     expect(screen.emitted().submit).toHaveLength(1)
+  })
+
+  it('emits liked when the operator opens the red-heart catalog', async () => {
+    const screen = render(SearchToolbar, {
+      props: { query: '', source: 'all', loading: false, likedEnabled: true, likedActive: false },
+    })
+
+    await fireEvent.click(screen.getByRole('button', { name: '我喜欢的' }))
+    expect(screen.emitted().liked).toHaveLength(1)
   })
 })

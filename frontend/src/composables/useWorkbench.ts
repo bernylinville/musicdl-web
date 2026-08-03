@@ -5,8 +5,10 @@ import type {
   Delivery,
   DownloadSelection,
   DownloadTask,
+  QualityOption,
   QualityState,
   SearchGroup,
+  SearchResponse,
   SessionStatus,
   Source,
   SourceScope,
@@ -15,6 +17,33 @@ import type {
 import { trackKey } from '@/utils/format'
 
 const idleQuality = (): QualityState => ({ status: 'idle', options: [], snapshotId: null, message: null })
+
+/** Prefer higher commercial fidelity; size breaks ties (e.g. higher vs exhigh). */
+const FIDELITY_RANK: Record<QualityOption['fidelity'], number> = {
+  standard: 10,
+  high: 20,
+  lossless: 40,
+  hi_res: 50,
+  spatial: 55,
+  master: 60,
+}
+
+function pickPreferredQualityId(options: QualityOption[]): string | null {
+  if (!options.length) return null
+  let best = options[0]!
+  for (const option of options.slice(1)) {
+    const rank = FIDELITY_RANK[option.fidelity]
+    const bestRank = FIDELITY_RANK[best.fidelity]
+    if (rank > bestRank) {
+      best = option
+      continue
+    }
+    if (rank === bestRank && (option.estimatedSizeBytes ?? 0) > (best.estimatedSizeBytes ?? 0)) {
+      best = option
+    }
+  }
+  return best.id
+}
 
 function qualityError(error: unknown): QualityState {
   if (error instanceof ApiError && (error.code === 'session_required' || error.status === 401)) {
@@ -29,6 +58,8 @@ function qualityError(error: unknown): QualityState {
 export function useWorkbench(api: MusicApi) {
   const query = shallowRef('')
   const sourceScope = shallowRef<SourceScope>('all')
+  const catalogMode = shallowRef<'search' | 'liked' | 'artist' | 'album'>('search')
+  const catalogRef = shallowRef<{ id: string; title: string; source: Source } | null>(null)
   const sessions = shallowRef<SessionStatus[]>([])
   const groups = shallowRef<SearchGroup[]>([])
   const activeTasks = shallowRef<DownloadTask[]>([])
@@ -82,6 +113,21 @@ export function useWorkbench(api: MusicApi) {
     apiState.value = 'available'
   }
 
+  function resetResultSelection(): void {
+    selectedTracks.value = {}
+    selectedQualityIds.value = {}
+    qualities.value = {}
+  }
+
+  async function applyCatalogResponse(response: SearchResponse, mode: 'search' | 'liked' | 'artist' | 'album'): Promise<void> {
+    catalogMode.value = mode
+    groups.value = response.groups
+    if (mode !== 'search') query.value = response.query
+    resetResultSelection()
+    searchState.value = 'ready'
+    apiState.value = 'available'
+  }
+
   async function search(page = 1): Promise<void> {
     const normalized = query.value.trim()
     if (!normalized) {
@@ -89,16 +135,13 @@ export function useWorkbench(api: MusicApi) {
       searchMessage.value = '请输入歌名、歌手名或两者组合'
       return
     }
+    catalogRef.value = null
+    catalogMode.value = 'search'
     searchState.value = 'loading'
     searchMessage.value = null
     try {
       const response = await api.search(normalized, sourceScope.value, page)
-      groups.value = response.groups
-      selectedTracks.value = {}
-      selectedQualityIds.value = {}
-      qualities.value = {}
-      searchState.value = 'ready'
-      apiState.value = 'available'
+      await applyCatalogResponse(response, 'search')
     } catch (error) {
       searchState.value = 'error'
       searchMessage.value = error instanceof Error ? error.message : '搜索 API 不可用'
@@ -106,11 +149,110 @@ export function useWorkbench(api: MusicApi) {
     }
   }
 
+  async function loadLiked(page = 1): Promise<void> {
+    const session = sessions.value.find((item) => item.source === 'netease')
+    if (!session || session.state !== 'authenticated') {
+      searchState.value = 'error'
+      searchMessage.value = '请先登录网易云音乐会话，再查看我喜欢的音乐'
+      return
+    }
+    catalogRef.value = null
+    sourceScope.value = 'netease'
+    searchState.value = 'loading'
+    searchMessage.value = null
+    try {
+      const response = await api.getLikedTracks('netease', page)
+      await applyCatalogResponse(response, 'liked')
+      if (!response.groups[0]?.tracks.length) {
+        searchMessage.value = '当前账号还没有红心歌曲'
+      }
+    } catch (error) {
+      searchState.value = 'error'
+      searchMessage.value = error instanceof Error ? error.message : '加载喜欢的音乐失败'
+      if (error instanceof ApiError && error.code === 'api_unavailable') apiState.value = 'unavailable'
+    }
+  }
+
+  async function openArtist(source: Source, artistId: string, title: string, page = 1): Promise<void> {
+    if (source !== 'netease' || !artistId) return
+    catalogRef.value = { id: artistId, title, source }
+    sourceScope.value = 'netease'
+    searchState.value = 'loading'
+    searchMessage.value = null
+    try {
+      const response = await api.getArtistTracks(source, artistId, page, title)
+      await applyCatalogResponse(response, 'artist')
+    } catch (error) {
+      searchState.value = 'error'
+      searchMessage.value = error instanceof Error ? error.message : '加载歌手曲目失败'
+      if (error instanceof ApiError && error.code === 'api_unavailable') apiState.value = 'unavailable'
+    }
+  }
+
+  async function openAlbum(source: Source, albumId: string, title: string, page = 1): Promise<void> {
+    if (source !== 'netease' || !albumId) return
+    catalogRef.value = { id: albumId, title, source }
+    sourceScope.value = 'netease'
+    searchState.value = 'loading'
+    searchMessage.value = null
+    try {
+      const response = await api.getAlbumTracks(source, albumId, page, title)
+      await applyCatalogResponse(response, 'album')
+    } catch (error) {
+      searchState.value = 'error'
+      searchMessage.value = error instanceof Error ? error.message : '加载专辑曲目失败'
+      if (error instanceof ApiError && error.code === 'api_unavailable') apiState.value = 'unavailable'
+    }
+  }
+
+  async function setTrackLiked(track: Track, liked: boolean): Promise<void> {
+    if (track.source !== 'netease') return
+    const key = trackKey(track.source, track.trackId)
+    // Optimistic UI update across result groups.
+    const previous = track.liked
+    groups.value = groups.value.map((group) => ({
+      ...group,
+      tracks: group.tracks.map((item) =>
+        trackKey(item.source, item.trackId) === key ? { ...item, liked } : item,
+      ),
+    }))
+    if (selectedTracks.value[key]) {
+      selectedTracks.value = { ...selectedTracks.value, [key]: { ...selectedTracks.value[key]!, liked } }
+    }
+    try {
+      const result = await api.setTrackLiked(track.source, track.trackId, liked)
+      groups.value = groups.value.map((group) => ({
+        ...group,
+        tracks: group.tracks.map((item) =>
+          trackKey(item.source, item.trackId) === key ? { ...item, liked: result.liked } : item,
+        ),
+      }))
+    } catch (error) {
+      groups.value = groups.value.map((group) => ({
+        ...group,
+        tracks: group.tracks.map((item) =>
+          trackKey(item.source, item.trackId) === key ? { ...item, liked: previous ?? null } : item,
+        ),
+      }))
+      operationMessage.value = error instanceof Error ? error.message : '更新红心状态失败'
+    }
+  }
+
   async function loadMore(source: Source): Promise<void> {
     const current = groups.value.find((group) => group.source === source)
     if (!current?.hasMore) return
     try {
-      const response = await api.search(query.value.trim(), source, current.page + 1)
+      const nextPage = current.page + 1
+      let response
+      if (catalogMode.value === 'liked') {
+        response = await api.getLikedTracks(source, nextPage)
+      } else if (catalogMode.value === 'artist' && catalogRef.value) {
+        response = await api.getArtistTracks(source, catalogRef.value.id, nextPage, catalogRef.value.title)
+      } else if (catalogMode.value === 'album' && catalogRef.value) {
+        response = await api.getAlbumTracks(source, catalogRef.value.id, nextPage, catalogRef.value.title)
+      } else {
+        response = await api.search(query.value.trim(), source, nextPage)
+      }
       const next = response.groups.find((group) => group.source === source)
       if (!next) return
       groups.value = groups.value.map((group) => group.source === source
@@ -123,10 +265,21 @@ export function useWorkbench(api: MusicApi) {
     }
   }
 
+  function ensurePreferredQuality(key: string, options: QualityOption[]): void {
+    const currentId = selectedQualityIds.value[key]
+    if (currentId && options.some((option) => option.id === currentId)) return
+    const preferred = pickPreferredQualityId(options)
+    if (!preferred) return
+    selectedQualityIds.value = { ...selectedQualityIds.value, [key]: preferred }
+  }
+
   async function requestQuality(track: Track, force = false): Promise<void> {
     const key = trackKey(track.source, track.trackId)
     const current = qualities.value[key]
-    if (!force && current && current.status !== 'idle' && current.status !== 'stale') return
+    if (!force && current && current.status !== 'idle' && current.status !== 'stale') {
+      if (current.status === 'ready') ensurePreferredQuality(key, current.options)
+      return
+    }
     const session = sessions.value.find((item) => item.source === track.source)
     if (!force && session && ['anonymous', 'expired'].includes(session.state)) {
       qualities.value = {
@@ -148,9 +301,7 @@ export function useWorkbench(api: MusicApi) {
           ? { status: 'ready', options: snapshot.options, snapshotId: snapshot.snapshotId, expiresAt: snapshot.expiresAt, message: null }
           : { status: 'unavailable', options: [], snapshotId: null, message: '当前会话没有可获取音质' },
       }
-      if (snapshot.options.length === 1) {
-        selectedQualityIds.value = { ...selectedQualityIds.value, [key]: snapshot.options[0]!.id }
-      }
+      if (snapshot.options.length) ensurePreferredQuality(key, snapshot.options)
     } catch (error) {
       qualities.value = { ...qualities.value, [key]: qualityError(error) }
     }
@@ -267,6 +418,8 @@ export function useWorkbench(api: MusicApi) {
   return {
     query,
     sourceScope,
+    catalogMode: shallowReadonly(catalogMode),
+    catalogRef: shallowReadonly(catalogRef),
     sessions: shallowReadonly(sessions),
     groups: shallowReadonly(groups),
     activeTasks: shallowReadonly(activeTasks),
@@ -284,6 +437,10 @@ export function useWorkbench(api: MusicApi) {
     selectedCount,
     readyCount,
     search,
+    loadLiked,
+    openArtist,
+    openAlbum,
+    setTrackLiked,
     loadMore,
     requestQuality,
     toggleTrack,

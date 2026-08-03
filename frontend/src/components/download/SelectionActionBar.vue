@@ -33,9 +33,10 @@ const emit = defineEmits<{ clear: []; submit: [] }>()
     </fieldset>
     <div class="submit-area">
       <span v-if="message" :class="['submit-message', { error: messageError }]" role="status">{{ message }}</span>
-      <span v-else-if="readyCount !== selectedCount" class="submit-message error">{{ selectedCount - readyCount }} 首尚未确认音质</span>
-      <button class="button button-primary" type="button" :disabled="submitting || !selectedCount" @click="emit('submit')">
-        {{ submitting ? '正在创建任务…' : `创建 ${selectedCount} 个任务` }}
+      <span v-else-if="readyCount !== selectedCount" class="submit-message error">{{ selectedCount - readyCount }} 首音质确认中…</span>
+      <span v-else-if="selectedCount" class="submit-message">默认最高可用音质，可在列表中改</span>
+      <button class="button button-primary" type="button" :disabled="submitting || !selectedCount || readyCount !== selectedCount" @click="emit('submit')">
+        {{ submitting ? '正在创建任务…' : readyCount === selectedCount ? `下载 ${selectedCount} 首` : `等待音质 ${readyCount}/${selectedCount}` }}
       </button>
     </div>
   </section>

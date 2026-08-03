@@ -14,7 +14,12 @@ from urllib.parse import quote, urlsplit
 
 import httpx
 
-from musicdl_web.adapters import NeteaseAdapter, QQAdapter
+from musicdl_web.adapters import (
+    NeteaseAdapter,
+    NeteaseCatalog,
+    NeteaseLikedCatalog,
+    QQAdapter,
+)
 from musicdl_web.api.platform_router import (
     LibraryStateView,
     PlatformSessionView,
@@ -195,6 +200,8 @@ class ProductionPlatformRuntime:
         self._snapshots = QualitySnapshotStore(ttl=settings.quality_ttl)
         self._netease = NeteaseAdapter(transport=transport)
         self._qq = QQAdapter(transport=transport)
+        self._liked = NeteaseLikedCatalog(transport=transport)
+        self._catalog = NeteaseCatalog(transport=transport)
         self._netease_control = PlatformHttpClient(
             allowed_hosts={_NETEASE_CONTROL_HOST}, transport=transport
         )
@@ -208,6 +215,11 @@ class ProductionPlatformRuntime:
         self._repository = repository
         self._tracks: dict[tuple[Source, str], Track] = {}
         self._track_lock = threading.Lock()
+        # Full liked-track list cache: (session_version) -> (expires_at, tracks)
+        self._liked_cache: tuple[int, datetime, tuple[Track, ...]] | None = None
+        # Lightweight red-heart id set: (session_version, expires_at, ids)
+        self._liked_ids_cache: tuple[int, datetime, frozenset[str]] | None = None
+        self._liked_lock = threading.Lock()
 
     def close(self) -> None:
         with self._qr_lock:
@@ -373,6 +385,226 @@ class ProductionPlatformRuntime:
                 )
             )
         return SearchResponseView(query=query, groups=tuple(groups))
+
+    def liked_tracks(
+        self, source: Source, page: int = 1, limit: int = 50
+    ) -> SearchResponseView:
+        """Return one page of the operator's Netease liked-music catalog."""
+
+        if source is not Source.NETEASE:
+            raise LookupError("liked music catalog is unavailable")
+        if page < 1 or not 1 <= limit <= 100:
+            raise ValueError("invalid liked catalog request")
+        loaded = self._sessions.material(source)
+        if loaded is None:
+            raise PermissionError("platform session is required")
+        material, session_version = loaded
+        try:
+            tracks = self._liked_tracks_cached(material, session_version)
+        except PermissionError:
+            raise
+        except Exception:
+            raise LookupError("liked music catalog is unavailable") from None
+        start = (page - 1) * limit
+        page_tracks = tracks[start : start + limit]
+        with self._track_lock:
+            for track in page_tracks:
+                self._tracks[(track.source, track.track_id)] = track
+        return SearchResponseView(
+            query="我喜欢的音乐",
+            groups=(
+                SearchGroupView(
+                    source=Source.NETEASE,
+                    tracks=tuple(self._track_view(track) for track in page_tracks),
+                    page=page,
+                    hasMore=start + limit < len(tracks),
+                    status="ready",
+                    message=None,
+                ),
+            ),
+        )
+
+    def artist_tracks(
+        self,
+        source: Source,
+        artist_id: str,
+        page: int = 1,
+        limit: int = 50,
+        *,
+        title_hint: str | None = None,
+    ) -> SearchResponseView:
+        if source is not Source.NETEASE:
+            raise LookupError("artist catalog is unavailable")
+        if page < 1 or not 1 <= limit <= 100:
+            raise ValueError("invalid catalog request")
+        cookies = self._optional_netease_cookies()
+        try:
+            result, title = self._catalog.artist_tracks(
+                artist_id,
+                page=page,
+                limit=limit,
+                cookies=cookies,
+                title_hint=title_hint,
+            )
+        except ValueError:
+            raise
+        except Exception:
+            raise LookupError("artist catalog is unavailable") from None
+        return self._catalog_response(f"歌手 · {title}", result)
+
+    def album_tracks(
+        self,
+        source: Source,
+        album_id: str,
+        page: int = 1,
+        limit: int = 50,
+        *,
+        title_hint: str | None = None,
+    ) -> SearchResponseView:
+        if source is not Source.NETEASE:
+            raise LookupError("album catalog is unavailable")
+        if page < 1 or not 1 <= limit <= 100:
+            raise ValueError("invalid catalog request")
+        cookies = self._optional_netease_cookies()
+        try:
+            result, title = self._catalog.album_tracks(
+                album_id,
+                page=page,
+                limit=limit,
+                cookies=cookies,
+                title_hint=title_hint,
+            )
+        except ValueError:
+            raise
+        except Exception:
+            raise LookupError("album catalog is unavailable") from None
+        return self._catalog_response(f"专辑 · {title}", result)
+
+    def _optional_netease_cookies(self) -> dict[str, str] | None:
+        loaded = self._sessions.material(Source.NETEASE)
+        if loaded is None:
+            return None
+        material, _ = loaded
+        return material.cookie_mapping_for(Source.NETEASE)
+
+    def _catalog_response(
+        self, query: str, result: SearchResults
+    ) -> SearchResponseView:
+        with self._track_lock:
+            for track in result.tracks:
+                self._tracks[(track.source, track.track_id)] = track
+        return SearchResponseView(
+            query=query,
+            groups=(
+                SearchGroupView(
+                    source=result.source,
+                    tracks=tuple(self._track_view(track) for track in result.tracks),
+                    page=result.page,
+                    hasMore=result.has_more,
+                    status="ready",
+                    message=None,
+                ),
+            ),
+        )
+
+    def set_track_liked(
+        self, source: Source, track_id: str, *, liked: bool
+    ) -> bool:
+        """Toggle Netease red-heart state; returns the confirmed liked flag."""
+
+        if source is not Source.NETEASE:
+            raise LookupError("like control is unavailable")
+        if not track_id or not track_id.isdigit():
+            raise ValueError("invalid track id")
+        loaded = self._sessions.material(source)
+        if loaded is None:
+            raise PermissionError("platform session is required")
+        material, session_version = loaded
+        try:
+            self._liked.set_like(
+                material.cookie_mapping_for(Source.NETEASE),
+                track_id,
+                liked=liked,
+            )
+        except PermissionError:
+            raise
+        except ValueError:
+            raise
+        except Exception:
+            raise LookupError("like update failed") from None
+        self._apply_liked_id_change(session_version, track_id, liked=liked)
+        return liked
+
+    def _liked_tracks_cached(
+        self, material: SessionMaterial, session_version: int
+    ) -> tuple[Track, ...]:
+        now = datetime.now(UTC)
+        with self._liked_lock:
+            cached = self._liked_cache
+            if (
+                cached is not None
+                and cached[0] == session_version
+                and cached[1] > now
+            ):
+                return cached[2]
+        full = self._liked.fetch_all(material.cookie_mapping_for(Source.NETEASE))
+        ids = frozenset(track.track_id for track in full)
+        with self._liked_lock:
+            expires = now + timedelta(minutes=5)
+            self._liked_cache = (session_version, expires, full)
+            self._liked_ids_cache = (session_version, expires, ids)
+        return full
+
+    def _liked_ids_cached(
+        self, material: SessionMaterial, session_version: int
+    ) -> frozenset[str]:
+        now = datetime.now(UTC)
+        with self._liked_lock:
+            cached = self._liked_ids_cache
+            if (
+                cached is not None
+                and cached[0] == session_version
+                and cached[1] > now
+            ):
+                return cached[2]
+        ids = self._liked.fetch_liked_ids(material.cookie_mapping_for(Source.NETEASE))
+        with self._liked_lock:
+            self._liked_ids_cache = (
+                session_version,
+                now + timedelta(minutes=5),
+                ids,
+            )
+        return ids
+
+    def _optional_liked_ids(self) -> frozenset[str] | None:
+        loaded = self._sessions.material(Source.NETEASE)
+        if loaded is None:
+            return None
+        material, session_version = loaded
+        try:
+            return self._liked_ids_cached(material, session_version)
+        except Exception:
+            return None
+
+    def _apply_liked_id_change(
+        self, session_version: int, track_id: str, *, liked: bool
+    ) -> None:
+        with self._liked_lock:
+            ids_cache = self._liked_ids_cache
+            if ids_cache is not None and ids_cache[0] == session_version:
+                current = set(ids_cache[2])
+                if liked:
+                    current.add(track_id)
+                else:
+                    current.discard(track_id)
+                self._liked_ids_cache = (
+                    session_version,
+                    ids_cache[1],
+                    frozenset(current),
+                )
+            # Full playlist cache may be stale after like/unlike.
+            if self._liked_cache is not None and self._liked_cache[0] == session_version:
+                self._liked_cache = None
 
     def artwork(self, source: Source, track_id: str) -> Artwork:
         cached = self._artwork.cached(source, track_id)
@@ -638,6 +870,11 @@ class ProductionPlatformRuntime:
                     state="available" if path.is_file() else "missing",
                     qualityLabel=_quality_label(quality),
                 )
+        liked: bool | None = None
+        if track.source is Source.NETEASE:
+            liked_ids = self._optional_liked_ids()
+            if liked_ids is not None:
+                liked = track.track_id in liked_ids
         return TrackView(
             source=track.source,
             trackId=track.track_id,
@@ -651,6 +888,9 @@ class ProductionPlatformRuntime:
                 else None
             ),
             library=library,
+            artistIds=track.artist_ids,
+            albumId=track.album_id,
+            liked=liked,
         )
 
     def _is_upgrade(self, source: Source, track_id: str, quality: Quality) -> bool:

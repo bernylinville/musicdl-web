@@ -108,7 +108,10 @@ function togglePreview(track: Track): void {
           v-model:query="workbench.query.value"
           v-model:source="workbench.sourceScope.value"
           :loading="workbench.searchState.value === 'loading'"
+          :liked-enabled="workbench.sessions.value.some((s) => s.source === 'netease' && s.state === 'authenticated')"
+          :liked-active="workbench.catalogMode.value === 'liked'"
           @submit="workbench.search()"
+          @liked="workbench.loadLiked()"
         />
 
         <p v-if="workbench.searchMessage.value" class="inline-error" role="alert">{{ workbench.searchMessage.value }}</p>
@@ -128,6 +131,9 @@ function togglePreview(track: Track): void {
             @select-quality="workbench.setQuality"
             @preview="togglePreview"
             @load-more="workbench.loadMore(group.source)"
+            @open-artist="(source, artistId, title) => workbench.openArtist(source, artistId, title)"
+            @open-album="(source, albumId, title) => workbench.openAlbum(source, albumId, title)"
+            @set-liked="(track, liked) => workbench.setTrackLiked(track, liked)"
           />
         </div>
         <div v-else class="welcome-state">

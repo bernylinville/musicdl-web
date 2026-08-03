@@ -211,14 +211,14 @@ class NeteaseCapabilityParser:
 def _map_track(value: Any) -> Track:
     song = require_mapping(value, Source.NETEASE, "invalid song")
     artists_value = require_list(song.get("ar"), Source.NETEASE, "invalid artists")
-    artists = tuple(
-        require_string(
-            require_mapping(artist, Source.NETEASE, "invalid artist").get("name"),
-            Source.NETEASE,
-            "invalid artist name",
+    artist_names: list[str] = []
+    artist_ids: list[str] = []
+    for raw_artist in artists_value:
+        artist = require_mapping(raw_artist, Source.NETEASE, "invalid artist")
+        artist_names.append(
+            require_string(artist.get("name"), Source.NETEASE, "invalid artist name")
         )
-        for artist in artists_value
-    )
+        artist_ids.append(_optional_positive_id(artist.get("id")) or "")
     album = require_mapping(song.get("al"), Source.NETEASE, "invalid album")
     duration = song.get("dt")
     if not isinstance(duration, int) or isinstance(duration, bool) or duration < 0:
@@ -227,13 +227,25 @@ def _map_track(value: Any) -> Track:
         source=Source.NETEASE,
         track_id=require_string(song.get("id"), Source.NETEASE, "invalid track id"),
         title=require_string(song.get("name"), Source.NETEASE, "invalid title"),
-        artists=artists,
+        artists=tuple(artist_names),
         album=require_string(album.get("name", ""), Source.NETEASE, "invalid album name"),
         duration_ms=duration,
         cover_url=normalize_cover_url(
             album.get("picUrl"), allowed_host_suffixes=("music.126.net",)
         ),
+        artist_ids=tuple(artist_ids),
+        album_id=_optional_positive_id(album.get("id")),
     )
+
+
+def _optional_positive_id(value: Any) -> str | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int) and value > 0:
+        return str(value)
+    if isinstance(value, str) and value.isdigit() and int(value) > 0:
+        return value
+    return None
 
 
 def _read_json(response: httpx.Response) -> dict[str, Any]:

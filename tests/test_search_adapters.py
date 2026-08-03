@@ -38,6 +38,8 @@ def test_netease_search_maps_stable_model_and_pagination(fixture_json) -> None:
         "album": "Fixture Album",
         "duration_ms": 213456,
         "cover_url": "https://p1.music.126.net/redacted/cover.jpg",
+        "artist_ids": ["1"],
+        "album_id": "10",
     }
     _assert_no_raw_platform_data(result.model_dump(mode="json"))
 
@@ -80,6 +82,8 @@ def test_qq_search_maps_source_specific_model_and_endpoint(fixture_json) -> None
         "album": "QQ Fixture Album",
         "duration_ms": 187000,
         "cover_url": ("https://y.gtimg.cn/music/photo_new/T002R300x300M000fixture-album-mid.jpg"),
+        "artist_ids": [""],
+        "album_id": None,
     }
     _assert_no_raw_platform_data(result.model_dump(mode="json"))
 

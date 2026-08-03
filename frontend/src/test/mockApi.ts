@@ -47,6 +47,9 @@ export const mockSearch: SearchResponse = {
           durationMs: 269000,
           coverUrl: '/api/v1/covers/netease/186016',
           library: null,
+          artistIds: ['6452'],
+          albumId: '32311',
+          liked: true,
         },
       ],
     },
@@ -77,6 +80,46 @@ const activeTask: DownloadTask = {
 export function createMockApi(overrides: Partial<MusicApi> = {}): MusicApi {
   const api: MusicApi = {
     getSessions: async () => mockSessions,
+    getLikedTracks: async () => ({
+      query: '我喜欢的音乐',
+      groups: [
+        {
+          source: 'netease',
+          page: 1,
+          hasMore: false,
+          status: 'ready',
+          message: null,
+          tracks: mockSearch.groups[0]!.tracks,
+        },
+      ],
+    }),
+    getArtistTracks: async (_source, _artistId, _page, title) => ({
+      query: `歌手 · ${title ?? 'Artist'}`,
+      groups: [
+        {
+          source: 'netease',
+          page: 1,
+          hasMore: false,
+          status: 'ready',
+          message: null,
+          tracks: mockSearch.groups[0]!.tracks,
+        },
+      ],
+    }),
+    getAlbumTracks: async (_source, _albumId, _page, title) => ({
+      query: `专辑 · ${title ?? 'Album'}`,
+      groups: [
+        {
+          source: 'netease',
+          page: 1,
+          hasMore: false,
+          status: 'ready',
+          message: null,
+          tracks: mockSearch.groups[0]!.tracks,
+        },
+      ],
+    }),
+    setTrackLiked: async (source, trackId, liked) => ({ source, trackId, liked }),
     beginQr: async (source: Source): Promise<QrChallenge> => ({
       challengeId: `${source}-qr`,
       state: 'waiting',

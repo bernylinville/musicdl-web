@@ -72,6 +72,10 @@ class TrackView(BaseModel):
     duration_ms: int = Field(alias="durationMs", ge=0)
     cover_url: str | None = Field(alias="coverUrl")
     library: LibraryStateView | None = None
+    artist_ids: tuple[str, ...] = Field(default=(), alias="artistIds")
+    album_id: str | None = Field(default=None, alias="albumId")
+    # null = unknown / no session / non-Netease; true/false when session can tell.
+    liked: bool | None = None
 
 
 class SearchGroupView(BaseModel):
@@ -113,6 +117,20 @@ class QualitySnapshotView(BaseModel):
     options: tuple[QualityOptionView, ...]
 
 
+class TrackLikeBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    liked: bool
+
+
+class TrackLikeView(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    source: Source
+    track_id: str = Field(alias="trackId")
+    liked: bool
+
+
 class PlatformService(Protocol):
     def session_statuses(self) -> tuple[PlatformSessionView, ...]: ...
 
@@ -121,6 +139,34 @@ class PlatformService(Protocol):
     def clear_session(self, source: Source) -> None: ...
 
     def search(self, query: str, source: Source | None, page: int) -> SearchResponseView: ...
+
+    def liked_tracks(
+        self, source: Source, page: int = 1, limit: int = 50
+    ) -> SearchResponseView: ...
+
+    def artist_tracks(
+        self,
+        source: Source,
+        artist_id: str,
+        page: int = 1,
+        limit: int = 50,
+        *,
+        title_hint: str | None = None,
+    ) -> SearchResponseView: ...
+
+    def album_tracks(
+        self,
+        source: Source,
+        album_id: str,
+        page: int = 1,
+        limit: int = 50,
+        *,
+        title_hint: str | None = None,
+    ) -> SearchResponseView: ...
+
+    def set_track_liked(
+        self, source: Source, track_id: str, *, liked: bool
+    ) -> bool: ...
 
     def quality_snapshot(self, source: Source, track_id: str) -> QualitySnapshotView: ...
 
@@ -255,6 +301,102 @@ def create_platform_router(service: PlatformService) -> APIRouter:
             return service.search(q, selected, page)
         except ValueError:
             raise HTTPException(status_code=422, detail="搜索参数无效") from None
+
+    @router.get("/library/{source}/liked", response_model=SearchResponseView)
+    def liked_tracks(
+        source: Source,
+        page: Annotated[int, Query(ge=1, le=1000)] = 1,
+        limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    ) -> SearchResponseView | JSONResponse:
+        try:
+            return service.liked_tracks(source, page=page, limit=limit)
+        except PermissionError:
+            return _error(
+                status.HTTP_401_UNAUTHORIZED,
+                "请先登录网易云音乐会话",
+                "session_required",
+            )
+        except LookupError:
+            return _error(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "当前平台暂不支持查看喜欢的音乐",
+                "liked_unavailable",
+            )
+        except ValueError:
+            raise HTTPException(status_code=422, detail="分页参数无效") from None
+
+    @router.get(
+        "/library/{source}/artists/{artist_id}/tracks",
+        response_model=SearchResponseView,
+    )
+    def artist_tracks(
+        source: Source,
+        artist_id: str,
+        page: Annotated[int, Query(ge=1, le=1000)] = 1,
+        limit: Annotated[int, Query(ge=1, le=100)] = 50,
+        title: Annotated[str | None, Query(max_length=120)] = None,
+    ) -> SearchResponseView | JSONResponse:
+        try:
+            return service.artist_tracks(
+                source, artist_id, page=page, limit=limit, title_hint=title
+            )
+        except LookupError:
+            return _error(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "歌手曲目暂时不可用",
+                "artist_unavailable",
+            )
+        except ValueError:
+            raise HTTPException(status_code=422, detail="歌手或分页参数无效") from None
+
+    @router.get(
+        "/library/{source}/albums/{album_id}/tracks",
+        response_model=SearchResponseView,
+    )
+    def album_tracks(
+        source: Source,
+        album_id: str,
+        page: Annotated[int, Query(ge=1, le=1000)] = 1,
+        limit: Annotated[int, Query(ge=1, le=100)] = 50,
+        title: Annotated[str | None, Query(max_length=120)] = None,
+    ) -> SearchResponseView | JSONResponse:
+        try:
+            return service.album_tracks(
+                source, album_id, page=page, limit=limit, title_hint=title
+            )
+        except LookupError:
+            return _error(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "专辑曲目暂时不可用",
+                "album_unavailable",
+            )
+        except ValueError:
+            raise HTTPException(status_code=422, detail="专辑或分页参数无效") from None
+
+    @router.put(
+        "/library/{source}/tracks/{track_id}/like",
+        response_model=TrackLikeView,
+    )
+    def set_track_liked(
+        source: Source, track_id: str, body: TrackLikeBody
+    ) -> TrackLikeView | JSONResponse:
+        try:
+            liked = service.set_track_liked(source, track_id, liked=body.liked)
+        except PermissionError:
+            return _error(
+                status.HTTP_401_UNAUTHORIZED,
+                "请先登录网易云音乐会话",
+                "session_required",
+            )
+        except LookupError:
+            return _error(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "红心状态更新失败",
+                "like_unavailable",
+            )
+        except ValueError:
+            raise HTTPException(status_code=422, detail="曲目参数无效") from None
+        return TrackLikeView(source=source, trackId=track_id, liked=liked)
 
     @router.get("/covers/{source}/{track_id}", response_class=Response)
     def cover(source: Source, track_id: str) -> Response:

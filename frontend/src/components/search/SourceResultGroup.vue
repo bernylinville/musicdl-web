@@ -19,6 +19,9 @@ const emit = defineEmits<{
   selectQuality: [track: Track, qualityId: string]
   preview: [track: Track]
   loadMore: []
+  openArtist: [source: Track['source'], artistId: string, title: string]
+  openAlbum: [source: Track['source'], albumId: string, title: string]
+  setLiked: [track: Track, liked: boolean]
 }>()
 
 const emptyQuality = (): QualityState => ({ status: 'idle', options: [], snapshotId: null, message: null })
@@ -43,6 +46,7 @@ const emptyQuality = (): QualityState => ({ status: 'idle', options: [], snapsho
         <thead>
           <tr>
             <th class="select-heading"><span class="sr-only">选择</span></th>
+            <th class="like-heading" title="网易云红心"><span class="sr-only">喜欢</span>♥</th>
             <th>歌曲</th>
             <th>专辑</th>
             <th>时长</th>
@@ -65,6 +69,9 @@ const emptyQuality = (): QualityState => ({ status: 'idle', options: [], snapsho
             @request-quality="(item, force) => emit('requestQuality', item, force)"
             @select-quality="(item, qualityId) => emit('selectQuality', item, qualityId)"
             @preview="emit('preview', $event)"
+            @open-artist="(source, artistId, title) => emit('openArtist', source, artistId, title)"
+            @open-album="(source, albumId, title) => emit('openAlbum', source, albumId, title)"
+            @set-liked="(track, liked) => emit('setLiked', track, liked)"
           />
         </tbody>
       </table>
@@ -90,6 +97,7 @@ table { width: 100%; min-width: 880px; border-collapse: collapse; table-layout: 
 thead { background: var(--canvas-subtle); }
 th { height: 31px; padding: 0 8px; color: var(--muted); font-size: 10px; font-weight: 600; text-align: left; text-transform: uppercase; letter-spacing: .04em; }
 .select-heading { width: 32px; }
+.like-heading { width: 36px; text-align: center; color: #e11d48; text-transform: none; letter-spacing: 0; font-size: 12px; }
 .group-notice { display: grid; gap: 4px; padding: 14px 16px; color: var(--danger); background: var(--danger-soft); font-size: 12px; }
 .group-notice span { opacity: .85; }
 .empty-state { padding: 28px 16px; color: var(--muted); font-size: 12px; text-align: center; }

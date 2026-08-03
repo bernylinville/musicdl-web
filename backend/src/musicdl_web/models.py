@@ -22,6 +22,9 @@ class Track(BaseModel):
     album: str
     duration_ms: int = Field(ge=0)
     cover_url: str | None = None
+    # Parallel to artists when the platform provides stable catalog ids.
+    artist_ids: tuple[str, ...] = ()
+    album_id: str | None = None
 
 
 class SearchResults(BaseModel):

@@ -32,6 +32,27 @@ export interface MusicApi {
   importSession(source: Source, payload: SessionImportPayload, signal?: AbortSignal): Promise<SessionStatus>
   clearSession(source: Source, signal?: AbortSignal): Promise<void>
   search(query: string, source: SourceScope, page: number, signal?: AbortSignal): Promise<SearchResponse>
+  getLikedTracks(source: Source, page: number, signal?: AbortSignal): Promise<SearchResponse>
+  getArtistTracks(
+    source: Source,
+    artistId: string,
+    page: number,
+    title?: string,
+    signal?: AbortSignal,
+  ): Promise<SearchResponse>
+  getAlbumTracks(
+    source: Source,
+    albumId: string,
+    page: number,
+    title?: string,
+    signal?: AbortSignal,
+  ): Promise<SearchResponse>
+  setTrackLiked(
+    source: Source,
+    trackId: string,
+    liked: boolean,
+    signal?: AbortSignal,
+  ): Promise<{ source: Source; trackId: string; liked: boolean }>
   getQualities(source: Source, trackId: string, signal?: AbortSignal): Promise<QualitySnapshot>
   previewUrl(source: Source, trackId: string): string
   createBatch(payload: CreateBatchPayload, signal?: AbortSignal): Promise<DownloadTask[]>
@@ -88,6 +109,24 @@ export function createHttpApi(baseUrl = '/api/v1', fetcher: typeof fetch = fetch
     clearSession: (source, signal) => request(`/sessions/${source}`, { method: 'DELETE', ...withSignal(signal) }),
     search: (query, source, page, signal) =>
       request(`/search?q=${encode(query)}&source=${source}&page=${page}`, withSignal(signal)),
+    getLikedTracks: (source, page, signal) =>
+      request(`/library/${source}/liked?page=${page}&limit=50`, withSignal(signal)),
+    getArtistTracks: (source, artistId, page, title, signal) => {
+      const q = new URLSearchParams({ page: String(page), limit: '50' })
+      if (title) q.set('title', title)
+      return request(`/library/${source}/artists/${encode(artistId)}/tracks?${q}`, withSignal(signal))
+    },
+    getAlbumTracks: (source, albumId, page, title, signal) => {
+      const q = new URLSearchParams({ page: String(page), limit: '50' })
+      if (title) q.set('title', title)
+      return request(`/library/${source}/albums/${encode(albumId)}/tracks?${q}`, withSignal(signal))
+    },
+    setTrackLiked: (source, trackId, liked, signal) =>
+      request(`/library/${source}/tracks/${encode(trackId)}/like`, {
+        ...json({ liked }),
+        method: 'PUT',
+        ...withSignal(signal),
+      }),
     getQualities: (source, trackId, signal) => request(`/tracks/${source}/${encode(trackId)}/qualities`, withSignal(signal)),
     previewUrl: (source, trackId) => `${baseUrl}/tracks/${source}/${encode(trackId)}/preview`,
     createBatch: (payload, signal) => request('/batches', { ...json(payload), ...withSignal(signal) }),

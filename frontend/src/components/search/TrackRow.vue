@@ -18,7 +18,53 @@ const emit = defineEmits<{
   requestQuality: [track: Track, force?: boolean]
   selectQuality: [track: Track, qualityId: string]
   preview: [track: Track]
+  openArtist: [source: Track['source'], artistId: string, title: string]
+  openAlbum: [source: Track['source'], albumId: string, title: string]
+  setLiked: [track: Track, liked: boolean]
 }>()
+
+const likeBusy = shallowRef(false)
+
+const likeLabel = computed(() => {
+  if (props.track.source !== 'netease') return '仅网易云可红心'
+  if (props.track.liked === true) return '已喜欢 · 点击取消'
+  if (props.track.liked === false) return '未喜欢 · 点击红心'
+  return '登录网易云后可红心'
+})
+
+async function toggleLike(event: Event): Promise<void> {
+  event.preventDefault()
+  event.stopPropagation()
+  if (props.track.source !== 'netease' || props.track.liked == null || likeBusy.value) return
+  likeBusy.value = true
+  try {
+    emit('setLiked', props.track, !props.track.liked)
+  } finally {
+    // Parent handles async; unlock after microtask so rapid double-click is damped.
+    queueMicrotask(() => { likeBusy.value = false })
+  }
+}
+
+function artistIdAt(index: number): string | null {
+  const id = props.track.artistIds?.[index]
+  return id && id.length > 0 ? id : null
+}
+
+function openArtist(index: number, name: string, event: Event): void {
+  event.preventDefault()
+  event.stopPropagation()
+  const id = artistIdAt(index)
+  if (!id || props.track.source !== 'netease') return
+  emit('openArtist', props.track.source, id, name)
+}
+
+function openAlbum(event: Event): void {
+  event.preventDefault()
+  event.stopPropagation()
+  const id = props.track.albumId
+  if (!id || props.track.source !== 'netease') return
+  emit('openAlbum', props.track.source, id, props.track.album)
+}
 
 const row = useTemplateRef<HTMLTableRowElement>('row')
 const coverFailed = shallowRef(false)
@@ -99,17 +145,57 @@ onUnmounted(() => observer?.disconnect())
     <td class="select-cell">
       <input :id="`select-${track.source}-${track.trackId}`" type="checkbox" :checked="selected" :aria-label="`选择 ${track.title}`" @change="emit('toggle', track)" />
     </td>
+    <td class="like-cell">
+      <button
+        class="like-button"
+        type="button"
+        :class="{
+          'like-on': track.liked === true,
+          'like-off': track.liked === false,
+          'like-unknown': track.liked == null || track.source !== 'netease',
+        }"
+        :disabled="track.source !== 'netease' || track.liked == null || likeBusy"
+        :aria-pressed="track.liked === true"
+        :aria-label="likeLabel"
+        :title="likeLabel"
+        @click="toggleLike"
+      >
+        <span aria-hidden="true">{{ track.liked === true ? '♥' : '♡' }}</span>
+      </button>
+    </td>
     <td class="track-cell">
       <div class="track-main">
         <img v-if="track.coverUrl && !coverFailed" class="cover" :src="track.coverUrl" alt="" loading="lazy" referrerpolicy="no-referrer" @error="coverFailed = true" />
         <span v-else class="cover cover-placeholder" aria-hidden="true">♪</span>
         <div class="track-copy">
           <strong>{{ track.title }}</strong>
-          <span>{{ track.artists.join(' / ') }}</span>
+          <span class="artists-line">
+            <template v-for="(name, index) in track.artists" :key="`${track.trackId}-a-${index}`">
+              <button
+                v-if="artistIdAt(index)"
+                class="meta-link"
+                type="button"
+                :title="`查看 ${name} 的歌曲`"
+                @click="openArtist(index, name, $event)"
+              >{{ name }}</button>
+              <span v-else>{{ name }}</span>
+              <span v-if="index < track.artists.length - 1" class="artist-sep"> / </span>
+            </template>
+            <span v-if="!track.artists.length">—</span>
+          </span>
         </div>
       </div>
     </td>
-    <td class="album-cell" :title="track.album">{{ track.album || '—' }}</td>
+    <td class="album-cell" :title="track.album">
+      <button
+        v-if="track.albumId && track.source === 'netease' && track.album"
+        class="meta-link album-link"
+        type="button"
+        :title="`查看专辑 ${track.album}`"
+        @click="openAlbum($event)"
+      >{{ track.album }}</button>
+      <span v-else>{{ track.album || '—' }}</span>
+    </td>
     <td class="duration-cell">{{ formatDuration(track.durationMs) }}</td>
     <td class="library-cell">
       <span v-if="track.library" :class="['library-badge', `library-${track.library.state}`]">
@@ -144,15 +230,51 @@ tr:hover, tr.selected { background: var(--row-hover); }
 td { height: 54px; padding: 6px 8px; vertical-align: middle; font-size: 12px; }
 .select-cell { width: 32px; text-align: center; }
 .select-cell input { width: 15px; height: 15px; accent-color: var(--accent); }
+.like-cell { width: 36px; text-align: center; }
+.like-button {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+.like-button:hover:not(:disabled) { background: var(--row-hover); }
+.like-button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.like-button:disabled { cursor: not-allowed; opacity: 0.55; }
+.like-button.like-on { color: #e11d48; }
+.like-button.like-off { color: var(--muted); }
+.like-button.like-unknown { color: var(--muted); opacity: 0.45; }
 .track-cell { min-width: 190px; }
 .track-main { display: flex; align-items: center; gap: 9px; }
 .cover { flex: 0 0 auto; width: 38px; height: 38px; border-radius: 5px; object-fit: cover; background: var(--surface-hover); }
 .cover-placeholder { display: grid; place-items: center; color: var(--muted); }
 .track-copy { display: grid; min-width: 0; gap: 3px; }
-.track-copy strong, .track-copy span, .album-cell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.track-copy strong, .artists-line, .album-cell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .track-copy strong { font-size: 12px; }
-.track-copy span, .album-cell, .duration-cell, .muted { color: var(--muted); }
+.artists-line, .album-cell, .duration-cell, .muted { color: var(--muted); }
 .album-cell { max-width: 150px; }
+.meta-link {
+  display: inline;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  text-decoration: none;
+}
+.meta-link:hover { color: var(--accent, #2563eb); text-decoration: underline; }
+.meta-link:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 2px; }
+.album-link { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .duration-cell { width: 46px; font-variant-numeric: tabular-nums; }
 .library-cell { min-width: 110px; }
 .library-badge { padding: 3px 6px; border-radius: 4px; color: var(--success); background: var(--success-soft); white-space: nowrap; }

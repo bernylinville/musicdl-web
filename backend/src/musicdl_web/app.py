@@ -187,6 +187,42 @@ class _BootstrapPlatformService:
             ),
         )
 
+    def liked_tracks(
+        self, source: Source, page: int = 1, limit: int = 50
+    ) -> SearchResponseView:
+        del source, page, limit
+        raise PermissionError("runtime is not initialized")
+
+    def artist_tracks(
+        self,
+        source: Source,
+        artist_id: str,
+        page: int = 1,
+        limit: int = 50,
+        *,
+        title_hint: str | None = None,
+    ) -> SearchResponseView:
+        del source, artist_id, page, limit, title_hint
+        raise LookupError("runtime is not initialized")
+
+    def album_tracks(
+        self,
+        source: Source,
+        album_id: str,
+        page: int = 1,
+        limit: int = 50,
+        *,
+        title_hint: str | None = None,
+    ) -> SearchResponseView:
+        del source, album_id, page, limit, title_hint
+        raise LookupError("runtime is not initialized")
+
+    def set_track_liked(
+        self, source: Source, track_id: str, *, liked: bool
+    ) -> bool:
+        del source, track_id, liked
+        raise PermissionError("runtime is not initialized")
+
     def quality_snapshot(
         self, source: Source, track_id: str
     ) -> QualitySnapshotView:

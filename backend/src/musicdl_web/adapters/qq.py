@@ -239,6 +239,7 @@ def _map_track(value: Any) -> Track:
         if isinstance(album_mid, str) and album_mid
         else None
     )
+    # QQ catalog drill-down is not wired yet; keep ids empty so the UI stays inert.
     return Track(
         source=Source.QQ,
         track_id=require_string(song.get("mid") or song.get("id"), Source.QQ, "invalid track id"),
@@ -249,6 +250,8 @@ def _map_track(value: Any) -> Track:
         cover_url=normalize_cover_url(
             derived_cover or album.get("picUrl"), allowed_host_suffixes=("y.gtimg.cn",)
         ),
+        artist_ids=tuple("" for _ in artists),
+        album_id=None,
     )
 
 

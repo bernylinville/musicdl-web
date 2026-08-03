@@ -23,6 +23,11 @@ export interface Track {
     state: 'available' | 'missing'
     qualityLabel: string
   }
+  /** Parallel to artists when the platform exposes catalog ids (Netease). */
+  artistIds?: string[]
+  albumId?: string | null
+  /** Netease red-heart; null when unknown or no session. */
+  liked?: boolean | null
 }
 
 export interface SearchGroup {

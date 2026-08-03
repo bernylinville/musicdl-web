@@ -40,7 +40,7 @@ describe('WorkbenchView', () => {
     expect(screen.getByRole('radio', { name: /保存到服务器/ })).toBeChecked()
     await fireEvent.click(screen.getByRole('radio', { name: /浏览器取回/ }))
     expect(screen.getByRole('radio', { name: /保存到服务器/ })).not.toBeChecked()
-    await fireEvent.click(screen.getByRole('button', { name: '创建 1 个任务' }))
+    await fireEvent.click(screen.getByRole('button', { name: '下载 1 首' }))
 
     await waitFor(() => expect(createBatch).toHaveBeenCalledWith({
       delivery: 'browser',
