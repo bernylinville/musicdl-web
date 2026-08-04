@@ -239,6 +239,10 @@ class _BootstrapPlatformService:
         del source, track_id, liked
         raise PermissionError("runtime is not initialized")
 
+    def open_preview(self, source: Source, track_id: str) -> tuple[bytes, str]:
+        del source, track_id
+        raise LookupError("runtime is not initialized")
+
     def quality_snapshot(
         self, source: Source, track_id: str
     ) -> QualitySnapshotView:

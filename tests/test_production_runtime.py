@@ -63,6 +63,7 @@ def make_runtime(
             assert request.headers.get("cookie") == "MUSIC_U=local-session-value"
             form = parse_qs(request.content.decode())
             requested = form["level"][0]
+            # Only standard/lossless are "owned" in this fixture; preview uses standard.
             available = requested in {"standard", "lossless"}
             actual = requested if available else "standard"
             return httpx.Response(
@@ -81,6 +82,14 @@ def make_runtime(
                     ],
                 },
             )
+        if request.url.host == "m10.music.126.net" and request.url.path.startswith(
+            "/media/"
+        ):
+            return httpx.Response(
+                200,
+                headers={"content-type": "audio/mpeg"},
+                content=b"ID3preview-bytes",
+            )
         if request.url.path == "/api/w/nuser/account/get":
             assert request.headers.get("cookie") == "MUSIC_U=local-session-value"
             return httpx.Response(
@@ -91,7 +100,7 @@ def make_runtime(
                     "profile": {"userId": 101, "nickname": "Runtime User"},
                 },
             )
-        raise AssertionError(f"unexpected platform request: {request.url.host}")
+        raise AssertionError(f"unexpected platform request: {request.url}")
 
     runtime = ProductionPlatformRuntime(
         RuntimeSettings(
@@ -326,7 +335,11 @@ async def test_platform_router_is_secret_free_and_qq_capabilities_fail_closed(
     assert no_session.json()["code"] == "session_required"
     assert qq_quality.status_code == 503
     assert qq_quality.json()["code"] == "quality_unavailable"
-    assert preview.status_code == 204
+    # Session-backed same-origin clip; platform media URL never leaves the server.
+    assert preview.status_code == 200
+    assert preview.headers["content-type"].startswith("audio/")
+    assert preview.content == b"ID3preview-bytes"
+    assert "music.126.net" not in preview.headers.get("location", "")
     runtime.close()
 
 

@@ -84,6 +84,8 @@ _NETEASE_HEADERS = {
         "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     ),
 }
+# Cap short previews so the workbench never becomes a full streamer.
+_PREVIEW_MAX_BYTES = 1_500_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -199,6 +201,7 @@ class ProductionPlatformRuntime:
         )
         self._sessions = SessionManager(store)
         self._snapshots = QualitySnapshotStore(ttl=settings.quality_ttl)
+        self._transport = transport
         self._netease = NeteaseAdapter(transport=transport)
         self._qq = QQAdapter(transport=transport)
         self._liked = NeteaseLikedCatalog(transport=transport)
@@ -852,6 +855,52 @@ class ProductionPlatformRuntime:
             return None
         return fetched.body
 
+    def open_preview(self, source: Source, track_id: str) -> tuple[bytes, str]:
+        """Return a short, proxied Netease clip; never expose the platform URL."""
+
+        if source is not Source.NETEASE:
+            raise LookupError("preview is unavailable")
+        if not track_id or not track_id.isdigit():
+            raise ValueError("invalid track id")
+        loaded = self._sessions.material(source)
+        if loaded is None:
+            raise PermissionError("platform session is required")
+        material, _ = loaded
+        cookie = material.cookie_header_for(source)
+        resolved: _ExactResult | None = None
+        for level in ("standard", "higher", "exhigh"):
+            try:
+                resolved = self._resolve_netease_preview(track_id, level, cookie)
+                break
+            except (LookupError, ValueError):
+                continue
+        if resolved is None:
+            raise LookupError("preview is unavailable")
+        client = PlatformHttpClient(
+            allowed_hosts={resolved.host}, transport=self._transport
+        )
+        try:
+            response = client.get_limited(
+                resolved.source_url,
+                max_bytes=_PREVIEW_MAX_BYTES,
+                allow_partial=True,
+                headers={
+                    "Referer": "https://music.163.com/",
+                    "User-Agent": _NETEASE_HEADERS["User-Agent"],
+                },
+            )
+        except Exception:
+            raise LookupError("preview is unavailable") from None
+        finally:
+            client.close()
+        body = response.content
+        if not body or body.lstrip()[:9].lower().startswith(
+            (b"<!doctype", b"<html")
+        ):
+            raise LookupError("preview is unavailable")
+        media_type = resolved.content_type or "audio/mpeg"
+        return body, media_type
+
     def _session_view(self, source: Source) -> PlatformSessionView:
         status = self._sessions.status(
             source, validator=self if source is Source.NETEASE else None
@@ -885,38 +934,72 @@ class ProductionPlatformRuntime:
     ) -> _ExactResult:
         if quality_id not in {tier.option.quality_id for tier in _NETEASE_TIERS}:
             raise ValueError("unknown Netease quality")
+        return self._resolve_netease_media(
+            track_id,
+            quality_id,
+            cookie_header,
+            encode_type="flac",
+            allow_trial=False,
+        )
+
+    def _resolve_netease_preview(
+        self, track_id: str, quality_id: str, cookie_header: str
+    ) -> _ExactResult:
+        """Like exact media resolve, but trial clips are allowed and mp3 is preferred."""
+
+        return self._resolve_netease_media(
+            track_id,
+            quality_id,
+            cookie_header,
+            encode_type="mp3",
+            allow_trial=True,
+        )
+
+    def _resolve_netease_media(
+        self,
+        track_id: str,
+        quality_id: str,
+        cookie_header: str,
+        *,
+        encode_type: str,
+        allow_trial: bool,
+    ) -> _ExactResult:
         response = self._netease_control.post_authenticated(
             _NETEASE_EXACT_ENDPOINT,
             cookie_header=cookie_header,
             data={
                 "ids": f"[{track_id}]",
                 "level": quality_id,
-                "encodeType": "flac",
+                "encodeType": encode_type,
             },
             headers=_NETEASE_HEADERS,
         )
         try:
             root = response.json()
         except ValueError:
-            raise LookupError("invalid Netease exact response") from None
+            raise LookupError("invalid Netease media response") from None
         if not isinstance(root, Mapping) or root.get("code") != 200:
-            raise LookupError("Netease exact quality is unavailable")
+            raise LookupError("Netease media is unavailable")
         data = root.get("data")
         if not isinstance(data, list) or len(data) != 1 or not isinstance(data[0], Mapping):
-            raise LookupError("Netease exact quality is unavailable")
+            raise LookupError("Netease media is unavailable")
         entry: Mapping[str, Any] = data[0]
-        if str(entry.get("id")) != track_id or entry.get("level") != quality_id:
+        if str(entry.get("id")) != track_id:
+            raise LookupError("Netease media track mismatch")
+        if not allow_trial and entry.get("level") != quality_id:
             raise LookupError("Netease exact quality changed")
-        if entry.get("freeTrialInfo") is not None:
+        if not allow_trial and entry.get("freeTrialInfo") is not None:
             raise LookupError("trial media is not an exact entitlement")
         source_url = entry.get("url")
         size = entry.get("size")
         if not isinstance(source_url, str) or not source_url:
-            raise LookupError("Netease exact quality is unavailable")
+            raise LookupError("Netease media is unavailable")
         if not isinstance(size, int) or isinstance(size, bool) or size <= 0:
-            raise LookupError("Netease exact quality is unavailable")
-        # Netease often returns http://m*.music.126.net/... CDN links; upgrade to
-        # HTTPS for the same allowlisted host so downloads keep TLS on.
+            # Preview trial clips sometimes omit size; allow a synthetic bound.
+            if allow_trial:
+                size = _PREVIEW_MAX_BYTES
+            else:
+                raise LookupError("Netease media is unavailable")
         if source_url.startswith("http://"):
             source_url = "https://" + source_url.removeprefix("http://")
         parsed = urlsplit(source_url)
@@ -933,10 +1016,12 @@ class ProductionPlatformRuntime:
         content_type = (
             "audio/flac"
             if media_type == "flac"
-            else "audio/mpeg" if media_type == "mp3" else None
+            else "audio/mpeg" if media_type in {"mp3", "m4a", None} else "audio/mpeg"
         )
+        if media_type not in {"flac", "mp3", "m4a", None}:
+            content_type = "audio/mpeg"
         return _ExactResult(
-            level=quality_id,
+            level=str(entry.get("level") or quality_id),
             size=size,
             content_type=content_type,
             host=host,

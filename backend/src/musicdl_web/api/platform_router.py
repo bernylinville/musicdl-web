@@ -184,6 +184,8 @@ class PlatformService(Protocol):
         self, source: Source, track_id: str, *, liked: bool
     ) -> bool: ...
 
+    def open_preview(self, source: Source, track_id: str) -> tuple[bytes, str]: ...
+
     def quality_snapshot(self, source: Source, track_id: str) -> QualitySnapshotView: ...
 
     def artwork(self, source: Source, track_id: str) -> Artwork: ...
@@ -478,12 +480,28 @@ def create_platform_router(service: PlatformService) -> APIRouter:
         except ValueError:
             raise HTTPException(status_code=422, detail="曲目或音质响应无效") from None
 
-    @router.get("/tracks/{source}/{track_id}/preview", status_code=204)
-    def preview_unavailable(source: Source, track_id: str) -> Response:
-        del source, track_id
-        # No platform has a proven legal short-preview lease yet. Never substitute a full-track
-        # URL or expose a source location to the browser.
-        return Response(status_code=204)
+    @router.get("/tracks/{source}/{track_id}/preview")
+    def preview(source: Source, track_id: str) -> Response:
+        """Same-origin short preview clip; never returns a platform media URL."""
+
+        try:
+            body, media_type = service.open_preview(source, track_id)
+        except PermissionError:
+            return _error(
+                status.HTTP_401_UNAUTHORIZED,
+                "请先登录网易云音乐会话",
+                "session_required",
+            )
+        except LookupError:
+            # Explicit empty success: frontend Audio treats this as unavailable.
+            return Response(status_code=status.HTTP_204_NO_CONTENT)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="曲目参数无效") from None
+        return Response(
+            content=body,
+            media_type=media_type,
+            headers={"Cache-Control": "no-store, private"},
+        )
 
     return router
 

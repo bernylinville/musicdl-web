@@ -63,6 +63,7 @@ class PlatformHttpClient:
         *,
         max_bytes: int,
         headers: Mapping[str, str] | None = None,
+        allow_partial: bool = False,
     ) -> httpx.Response:
         if max_bytes < 1:
             raise ValueError("response limit must be positive")
@@ -74,6 +75,7 @@ class PlatformHttpClient:
             headers=headers,
             credential_host=None,
             max_bytes=max_bytes,
+            allow_partial=allow_partial,
         )
 
     def post_authenticated(
@@ -139,6 +141,7 @@ class PlatformHttpClient:
         credential_host: str | None,
         cookie_header: str | None = None,
         max_bytes: int | None = None,
+        allow_partial: bool = False,
     ) -> httpx.Response:
         request_data = data
         request_json = json
@@ -180,7 +183,9 @@ class PlatformHttpClient:
                         f"platform request returned HTTP {response.status_code}"
                     )
                 if max_bytes is not None:
-                    return _read_limited(response, max_bytes)
+                    return _read_limited(
+                        response, max_bytes, allow_partial=allow_partial
+                    )
                 return response
 
             location = response.headers.get("location")
@@ -233,7 +238,12 @@ class PlatformHttpClient:
         self.close()
 
 
-def _read_limited(response: httpx.Response, max_bytes: int) -> httpx.Response:
+def _read_limited(
+    response: httpx.Response,
+    max_bytes: int,
+    *,
+    allow_partial: bool = False,
+) -> httpx.Response:
     declared = response.headers.get("content-length")
     if declared is not None:
         try:
@@ -241,15 +251,28 @@ def _read_limited(response: httpx.Response, max_bytes: int) -> httpx.Response:
         except ValueError:
             response.close()
             raise NetworkRequestError("platform response length is invalid") from None
-        if declared_bytes < 0 or declared_bytes > max_bytes:
+        if declared_bytes < 0:
+            response.close()
+            raise NetworkRequestError("platform response length is invalid")
+        # Full downloads reject oversized objects early. Previews may stream a prefix
+        # of a larger authorized media object (Content-Length still reports full size).
+        if not allow_partial and declared_bytes > max_bytes:
             response.close()
             raise NetworkRequestError("platform response exceeds the size limit")
     body = bytearray()
     try:
         for chunk in response.iter_bytes():
-            body.extend(chunk)
-            if len(body) > max_bytes:
+            remaining = max_bytes - len(body)
+            if remaining <= 0:
+                if allow_partial:
+                    break
                 raise NetworkRequestError("platform response exceeds the size limit")
+            if len(chunk) > remaining:
+                if allow_partial:
+                    body.extend(chunk[:remaining])
+                    break
+                raise NetworkRequestError("platform response exceeds the size limit")
+            body.extend(chunk)
     finally:
         response.close()
     return httpx.Response(
