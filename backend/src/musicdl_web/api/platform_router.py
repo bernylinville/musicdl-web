@@ -76,6 +76,8 @@ class TrackView(BaseModel):
     album_id: str | None = Field(default=None, alias="albumId")
     # null = unknown / no session / non-Netease; true/false when session can tell.
     liked: bool | None = None
+    liked_at: str | None = Field(default=None, alias="likedAt")
+    play_count: int | None = Field(default=None, alias="playCount", ge=0)
 
 
 class SearchGroupView(BaseModel):
@@ -141,7 +143,21 @@ class PlatformService(Protocol):
     def search(self, query: str, source: Source | None, page: int) -> SearchResponseView: ...
 
     def liked_tracks(
-        self, source: Source, page: int = 1, limit: int = 50
+        self,
+        source: Source,
+        page: int = 1,
+        limit: int = 50,
+        *,
+        sort: str = "default",
+    ) -> SearchResponseView: ...
+
+    def play_record_tracks(
+        self,
+        source: Source,
+        page: int = 1,
+        limit: int = 50,
+        *,
+        window: str = "all",
     ) -> SearchResponseView: ...
 
     def artist_tracks(
@@ -307,9 +323,12 @@ def create_platform_router(service: PlatformService) -> APIRouter:
         source: Source,
         page: Annotated[int, Query(ge=1, le=1000)] = 1,
         limit: Annotated[int, Query(ge=1, le=100)] = 50,
+        sort: Annotated[
+            Literal["default", "liked_at_desc", "liked_at_asc"], Query()
+        ] = "default",
     ) -> SearchResponseView | JSONResponse:
         try:
-            return service.liked_tracks(source, page=page, limit=limit)
+            return service.liked_tracks(source, page=page, limit=limit, sort=sort)
         except PermissionError:
             return _error(
                 status.HTTP_401_UNAUTHORIZED,
@@ -323,7 +342,33 @@ def create_platform_router(service: PlatformService) -> APIRouter:
                 "liked_unavailable",
             )
         except ValueError:
-            raise HTTPException(status_code=422, detail="分页参数无效") from None
+            raise HTTPException(status_code=422, detail="分页或排序参数无效") from None
+
+    @router.get("/library/{source}/play-record", response_model=SearchResponseView)
+    def play_record_tracks(
+        source: Source,
+        page: Annotated[int, Query(ge=1, le=1000)] = 1,
+        limit: Annotated[int, Query(ge=1, le=100)] = 50,
+        window: Annotated[Literal["all", "week"], Query()] = "all",
+    ) -> SearchResponseView | JSONResponse:
+        try:
+            return service.play_record_tracks(
+                source, page=page, limit=limit, window=window
+            )
+        except PermissionError:
+            return _error(
+                status.HTTP_401_UNAUTHORIZED,
+                "请先登录网易云音乐会话",
+                "session_required",
+            )
+        except LookupError:
+            return _error(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "听歌排行暂时不可用",
+                "play_record_unavailable",
+            )
+        except ValueError:
+            raise HTTPException(status_code=422, detail="分页或时间窗参数无效") from None
 
     @router.get(
         "/library/{source}/artists/{artist_id}/tracks",

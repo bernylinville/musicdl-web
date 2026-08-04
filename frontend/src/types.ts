@@ -28,6 +28,10 @@ export interface Track {
   albumId?: string | null
   /** Netease red-heart; null when unknown or no session. */
   liked?: boolean | null
+  /** ISO timestamp when added to liked playlist. */
+  likedAt?: string | null
+  /** Personal play-ranking count when browsing 听歌排行. */
+  playCount?: number | null
 }
 
 export interface SearchGroup {

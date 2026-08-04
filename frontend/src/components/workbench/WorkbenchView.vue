@@ -110,8 +110,12 @@ function togglePreview(track: Track): void {
           :loading="workbench.searchState.value === 'loading'"
           :liked-enabled="workbench.sessions.value.some((s) => s.source === 'netease' && s.state === 'authenticated')"
           :liked-active="workbench.catalogMode.value === 'liked'"
+          :play-record-active="workbench.catalogMode.value === 'play_record'"
+          :liked-sort="workbench.likedSort.value"
           @submit="workbench.search()"
           @liked="workbench.loadLiked()"
+          @play-record="workbench.loadPlayRecord()"
+          @update:liked-sort="workbench.setLikedSort"
         />
 
         <p v-if="workbench.searchMessage.value" class="inline-error" role="alert">{{ workbench.searchMessage.value }}</p>

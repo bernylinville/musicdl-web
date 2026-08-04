@@ -58,8 +58,10 @@ function qualityError(error: unknown): QualityState {
 export function useWorkbench(api: MusicApi) {
   const query = shallowRef('')
   const sourceScope = shallowRef<SourceScope>('all')
-  const catalogMode = shallowRef<'search' | 'liked' | 'artist' | 'album'>('search')
+  const catalogMode = shallowRef<'search' | 'liked' | 'artist' | 'album' | 'play_record'>('search')
   const catalogRef = shallowRef<{ id: string; title: string; source: Source } | null>(null)
+  const likedSort = shallowRef<'default' | 'liked_at_desc' | 'liked_at_asc'>('default')
+  const playRecordWindow = shallowRef<'all' | 'week'>('all')
   const sessions = shallowRef<SessionStatus[]>([])
   const groups = shallowRef<SearchGroup[]>([])
   const activeTasks = shallowRef<DownloadTask[]>([])
@@ -120,7 +122,10 @@ export function useWorkbench(api: MusicApi) {
     qualities.value = {}
   }
 
-  async function applyCatalogResponse(response: SearchResponse, mode: 'search' | 'liked' | 'artist' | 'album'): Promise<void> {
+  async function applyCatalogResponse(
+    response: SearchResponse,
+    mode: 'search' | 'liked' | 'artist' | 'album' | 'play_record',
+  ): Promise<void> {
     catalogMode.value = mode
     groups.value = response.groups
     if (mode !== 'search') query.value = response.query
@@ -162,7 +167,7 @@ export function useWorkbench(api: MusicApi) {
     searchState.value = 'loading'
     searchMessage.value = null
     try {
-      const response = await api.getLikedTracks('netease', page)
+      const response = await api.getLikedTracks('netease', page, likedSort.value)
       await applyCatalogResponse(response, 'liked')
       if (!response.groups[0]?.tracks.length) {
         searchMessage.value = '当前账号还没有红心歌曲'
@@ -170,6 +175,35 @@ export function useWorkbench(api: MusicApi) {
     } catch (error) {
       searchState.value = 'error'
       searchMessage.value = error instanceof Error ? error.message : '加载喜欢的音乐失败'
+      if (error instanceof ApiError && error.code === 'api_unavailable') apiState.value = 'unavailable'
+    }
+  }
+
+  async function setLikedSort(sort: 'default' | 'liked_at_desc' | 'liked_at_asc'): Promise<void> {
+    likedSort.value = sort
+    if (catalogMode.value === 'liked') await loadLiked(1)
+  }
+
+  async function loadPlayRecord(page = 1): Promise<void> {
+    const session = sessions.value.find((item) => item.source === 'netease')
+    if (!session || session.state !== 'authenticated') {
+      searchState.value = 'error'
+      searchMessage.value = '请先登录网易云音乐会话，再查看听歌排行'
+      return
+    }
+    catalogRef.value = null
+    sourceScope.value = 'netease'
+    searchState.value = 'loading'
+    searchMessage.value = null
+    try {
+      const response = await api.getPlayRecord('netease', page, playRecordWindow.value)
+      await applyCatalogResponse(response, 'play_record')
+      searchMessage.value = response.groups[0]?.tracks.length
+        ? null
+        : '听歌排行暂无数据（平台只返回排行榜长度内的曲目，并非完整听歌历史）'
+    } catch (error) {
+      searchState.value = 'error'
+      searchMessage.value = error instanceof Error ? error.message : '加载听歌排行失败'
       if (error instanceof ApiError && error.code === 'api_unavailable') apiState.value = 'unavailable'
     }
   }
@@ -246,7 +280,9 @@ export function useWorkbench(api: MusicApi) {
       const nextPage = current.page + 1
       let response
       if (catalogMode.value === 'liked') {
-        response = await api.getLikedTracks(source, nextPage)
+        response = await api.getLikedTracks(source, nextPage, likedSort.value)
+      } else if (catalogMode.value === 'play_record') {
+        response = await api.getPlayRecord(source, nextPage, playRecordWindow.value)
       } else if (catalogMode.value === 'artist' && catalogRef.value) {
         response = await api.getArtistTracks(source, catalogRef.value.id, nextPage, catalogRef.value.title)
       } else if (catalogMode.value === 'album' && catalogRef.value) {
@@ -489,6 +525,8 @@ export function useWorkbench(api: MusicApi) {
     sourceScope,
     catalogMode: shallowReadonly(catalogMode),
     catalogRef: shallowReadonly(catalogRef),
+    likedSort,
+    playRecordWindow: shallowReadonly(playRecordWindow),
     sessions: shallowReadonly(sessions),
     groups: shallowReadonly(groups),
     activeTasks: shallowReadonly(activeTasks),
@@ -508,6 +546,8 @@ export function useWorkbench(api: MusicApi) {
     readyCount,
     search,
     loadLiked,
+    setLikedSort,
+    loadPlayRecord,
     openArtist,
     openAlbum,
     setTrackLiked,

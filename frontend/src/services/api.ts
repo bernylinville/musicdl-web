@@ -32,7 +32,18 @@ export interface MusicApi {
   importSession(source: Source, payload: SessionImportPayload, signal?: AbortSignal): Promise<SessionStatus>
   clearSession(source: Source, signal?: AbortSignal): Promise<void>
   search(query: string, source: SourceScope, page: number, signal?: AbortSignal): Promise<SearchResponse>
-  getLikedTracks(source: Source, page: number, signal?: AbortSignal): Promise<SearchResponse>
+  getLikedTracks(
+    source: Source,
+    page: number,
+    sort?: 'default' | 'liked_at_desc' | 'liked_at_asc',
+    signal?: AbortSignal,
+  ): Promise<SearchResponse>
+  getPlayRecord(
+    source: Source,
+    page: number,
+    window?: 'all' | 'week',
+    signal?: AbortSignal,
+  ): Promise<SearchResponse>
   getArtistTracks(
     source: Source,
     artistId: string,
@@ -109,8 +120,14 @@ export function createHttpApi(baseUrl = '/api/v1', fetcher: typeof fetch = fetch
     clearSession: (source, signal) => request(`/sessions/${source}`, { method: 'DELETE', ...withSignal(signal) }),
     search: (query, source, page, signal) =>
       request(`/search?q=${encode(query)}&source=${source}&page=${page}`, withSignal(signal)),
-    getLikedTracks: (source, page, signal) =>
-      request(`/library/${source}/liked?page=${page}&limit=50`, withSignal(signal)),
+    getLikedTracks: (source, page, sort = 'default', signal) => {
+      const q = new URLSearchParams({ page: String(page), limit: '50', sort })
+      return request(`/library/${source}/liked?${q}`, withSignal(signal))
+    },
+    getPlayRecord: (source, page, window = 'all', signal) => {
+      const q = new URLSearchParams({ page: String(page), limit: '50', window })
+      return request(`/library/${source}/play-record?${q}`, withSignal(signal))
+    },
     getArtistTracks: (source, artistId, page, title, signal) => {
       const q = new URLSearchParams({ page: String(page), limit: '50' })
       if (title) q.set('title', title)

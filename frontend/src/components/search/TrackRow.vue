@@ -147,6 +147,21 @@ const downloadDisabled = computed(() => {
   return false
 })
 
+const catalogMeta = computed(() => {
+  if (typeof props.track.playCount === 'number') return `播放 ${props.track.playCount} 次`
+  if (props.track.likedAt) {
+    const ms = Date.parse(props.track.likedAt)
+    if (!Number.isNaN(ms)) {
+      const d = new Date(ms)
+      const y = d.getFullYear()
+      const m = String(d.getMonth() + 1).padStart(2, '0')
+      const day = String(d.getDate()).padStart(2, '0')
+      return `红心于 ${y}-${m}-${day}`
+    }
+  }
+  return null
+})
+
 onMounted(() => {
   requestIfNeeded()
   if (!('IntersectionObserver' in window)) return
@@ -218,6 +233,7 @@ onUnmounted(() => observer?.disconnect())
             </template>
             <span v-if="!track.artists.length">—</span>
           </span>
+          <span v-if="catalogMeta" class="catalog-meta">{{ catalogMeta }}</span>
         </div>
       </div>
     </td>
@@ -304,6 +320,7 @@ td { height: 54px; padding: 6px 8px; vertical-align: middle; font-size: 12px; }
 .cover { flex: 0 0 auto; width: 38px; height: 38px; border-radius: 5px; object-fit: cover; background: var(--surface-hover); }
 .cover-placeholder { display: grid; place-items: center; color: var(--muted); }
 .track-copy { display: grid; min-width: 0; gap: 3px; }
+.catalog-meta { color: var(--muted); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .track-copy strong, .artists-line, .album-cell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .track-copy strong { font-size: 12px; }
 .artists-line, .album-cell, .duration-cell, .muted { color: var(--muted); }

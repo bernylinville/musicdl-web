@@ -26,6 +26,10 @@ _USER_PLAYLIST_API = "/api/user/playlist"
 _PLAYLIST_DETAIL_API = "/api/v6/playlist/detail"
 _LIKELIST_API = "/api/song/like/get"
 _LIKE_API = "/api/song/like"
+_PLAY_RECORD_API = "/api/v1/play/record"
+
+LikedSort = str  # default | liked_at_desc | liked_at_asc
+PlayRecordWindow = str  # all | week
 
 
 class NeteaseLikedCatalog:
@@ -58,9 +62,76 @@ class NeteaseLikedCatalog:
         *,
         page: int = 1,
         limit: int = 50,
+        sort: LikedSort = "default",
     ) -> SearchResults:
         _validate_page(page, limit)
+        if sort not in {"default", "liked_at_desc", "liked_at_asc"}:
+            raise ValueError("invalid liked sort")
         tracks = self.fetch_all(cookies)
+        ordered = _sort_liked_tracks(tracks, sort)
+        start = (page - 1) * limit
+        page_tracks = ordered[start : start + limit]
+        return SearchResults(
+            source=Source.NETEASE,
+            tracks=page_tracks,
+            page=page,
+            has_more=start + limit < len(ordered),
+        )
+
+    def fetch_play_record(
+        self,
+        cookies: Mapping[str, str],
+        *,
+        window: PlayRecordWindow = "all",
+    ) -> tuple[Track, ...]:
+        """Return personal play-ranking tracks (not limited to liked songs)."""
+
+        if not cookies:
+            raise PermissionError("platform session is required")
+        if window not in {"all", "week"}:
+            raise ValueError("invalid play-record window")
+        client = NeteaseEapiClient(transport=self._transport)
+        try:
+            client.merge_cookies(cookies)
+            uid = _resolve_uid(client)
+            root = _eapi_json(
+                client,
+                _PLAY_RECORD_API,
+                {"uid": uid, "type": 0 if window == "all" else 1},
+            )
+        finally:
+            client.close()
+        if root.get("code") != 200:
+            raise PlatformResponseError(Source.NETEASE, "play record unavailable")
+        key = "allData" if window == "all" else "weekData"
+        rows = require_list(root.get(key, []), Source.NETEASE, "invalid play record")
+        tracks: list[Track] = []
+        for row in rows:
+            entry = require_mapping(row, Source.NETEASE, "invalid play record row")
+            play_count = entry.get("playCount")
+            if not isinstance(play_count, int) or isinstance(play_count, bool) or play_count < 0:
+                play_count = 0
+            song = entry.get("song")
+            if song is None:
+                continue
+            try:
+                track = _map_track(song)
+            except PlatformResponseError:
+                continue
+            tracks.append(track.model_copy(update={"play_count": play_count}))
+        # Platform usually returns ranked high→low; keep that order.
+        return tuple(tracks)
+
+    def list_play_record(
+        self,
+        cookies: Mapping[str, str],
+        *,
+        page: int = 1,
+        limit: int = 50,
+        window: PlayRecordWindow = "all",
+    ) -> SearchResults:
+        _validate_page(page, limit)
+        tracks = self.fetch_play_record(cookies, window=window)
         start = (page - 1) * limit
         page_tracks = tracks[start : start + limit]
         return SearchResults(
@@ -175,15 +246,53 @@ def _playlist_tracks(client: NeteaseEapiClient, playlist_id: int) -> tuple[Track
     if root.get("code") != 200:
         raise PlatformResponseError(Source.NETEASE, "playlist detail failed")
     playlist = require_mapping(root.get("playlist"), Source.NETEASE, "missing playlist")
+    liked_at_by_id = _liked_at_index(playlist.get("trackIds"))
     songs = require_list(playlist.get("tracks", []), Source.NETEASE, "invalid tracks")
     tracks: list[Track] = []
     for song in songs:
         try:
-            tracks.append(_map_track(song))
+            track = _map_track(song)
         except PlatformResponseError:
             # Skip unmappable rows rather than failing the whole liked catalog.
             continue
+        liked_at = liked_at_by_id.get(track.track_id)
+        if liked_at is not None:
+            track = track.model_copy(update={"liked_at_ms": liked_at})
+        tracks.append(track)
     return tuple(tracks)
+
+
+def _liked_at_index(raw_ids: Any) -> dict[str, int]:
+    if not isinstance(raw_ids, list):
+        return {}
+    result: dict[str, int] = {}
+    for value in raw_ids:
+        if not isinstance(value, Mapping):
+            continue
+        track_id = value.get("id")
+        added_at = value.get("at")
+        if isinstance(track_id, bool) or isinstance(added_at, bool):
+            continue
+        if isinstance(track_id, int) and track_id > 0:
+            key = str(track_id)
+        elif isinstance(track_id, str) and track_id.isdigit() and int(track_id) > 0:
+            key = track_id
+        else:
+            continue
+        if isinstance(added_at, int) and added_at > 0:
+            result[key] = added_at
+    return result
+
+
+def _sort_liked_tracks(tracks: tuple[Track, ...], sort: LikedSort) -> tuple[Track, ...]:
+    if sort == "default":
+        return tracks
+    reverse = sort == "liked_at_desc"
+    # Tracks without liked_at sink to the end for both directions.
+    dated = [t for t in tracks if t.liked_at_ms is not None]
+    undated = [t for t in tracks if t.liked_at_ms is None]
+    dated.sort(key=lambda t: t.liked_at_ms or 0, reverse=reverse)
+    return tuple(dated + undated)
 
 
 def _eapi_json(

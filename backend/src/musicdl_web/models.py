@@ -25,6 +25,9 @@ class Track(BaseModel):
     # Parallel to artists when the platform provides stable catalog ids.
     artist_ids: tuple[str, ...] = ()
     album_id: str | None = None
+    # Catalog-only metadata (liked playlist add time / personal play ranking).
+    liked_at_ms: int | None = Field(default=None, ge=0)
+    play_count: int | None = Field(default=None, ge=0)
 
 
 class SearchResults(BaseModel):

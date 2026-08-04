@@ -37,9 +37,9 @@ def eapi_params(api_path: str, payload: Mapping[str, Any]) -> str:
         raise ValueError("eapi path must start with /api/")
     text = json.dumps(dict(payload), separators=(",", ":"), ensure_ascii=False)
     digest = hashlib.md5(
-        f"nobody{api_path}use{text}md5forencrypt".encode("utf-8")
+        f"nobody{api_path}use{text}md5forencrypt".encode()
     ).hexdigest()
-    plain = f"{api_path}-36cd479b6b5-{text}-36cd479b6b5-{digest}".encode("utf-8")
+    plain = f"{api_path}-36cd479b6b5-{text}-36cd479b6b5-{digest}".encode()
     padder = PKCS7(algorithms.AES.block_size).padder()
     padded = padder.update(plain) + padder.finalize()
     encryptor = Cipher(algorithms.AES(_EAPI_KEY), modes.ECB()).encryptor()

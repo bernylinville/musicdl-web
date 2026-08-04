@@ -40,6 +40,8 @@ def test_netease_search_maps_stable_model_and_pagination(fixture_json) -> None:
         "cover_url": "https://p1.music.126.net/redacted/cover.jpg",
         "artist_ids": ["1"],
         "album_id": "10",
+        "liked_at_ms": None,
+        "play_count": None,
     }
     _assert_no_raw_platform_data(result.model_dump(mode="json"))
 
@@ -84,6 +86,8 @@ def test_qq_search_maps_source_specific_model_and_endpoint(fixture_json) -> None
         "cover_url": ("https://y.gtimg.cn/music/photo_new/T002R300x300M000fixture-album-mid.jpg"),
         "artist_ids": [""],
         "album_id": None,
+        "liked_at_ms": None,
+        "play_count": None,
     }
     _assert_no_raw_platform_data(result.model_dump(mode="json"))
 

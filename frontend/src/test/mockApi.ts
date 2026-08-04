@@ -89,7 +89,26 @@ export function createMockApi(overrides: Partial<MusicApi> = {}): MusicApi {
           hasMore: false,
           status: 'ready',
           message: null,
-          tracks: mockSearch.groups[0]!.tracks,
+          tracks: mockSearch.groups[0]!.tracks.map((track) => ({
+            ...track,
+            likedAt: '2026-01-15T08:00:00+00:00',
+          })),
+        },
+      ],
+    }),
+    getPlayRecord: async () => ({
+      query: '听歌排行 · 全部',
+      groups: [
+        {
+          source: 'netease',
+          page: 1,
+          hasMore: false,
+          status: 'ready',
+          message: null,
+          tracks: mockSearch.groups[0]!.tracks.map((track) => ({
+            ...track,
+            playCount: 42,
+          })),
         },
       ],
     }),

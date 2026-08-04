@@ -20,6 +20,7 @@ from musicdl_web.adapters import (
     NeteaseLikedCatalog,
     QQAdapter,
 )
+from musicdl_web.adapters.netease_liked import _sort_liked_tracks
 from musicdl_web.api.platform_router import (
     LibraryStateView,
     PlatformSessionView,
@@ -219,6 +220,10 @@ class ProductionPlatformRuntime:
         self._liked_cache: tuple[int, datetime, tuple[Track, ...]] | None = None
         # Lightweight red-heart id set: (session_version, expires_at, ids)
         self._liked_ids_cache: tuple[int, datetime, frozenset[str]] | None = None
+        # Personal play ranking: (session_version, window) -> (expires_at, tracks)
+        self._play_record_cache: dict[
+            tuple[int, str], tuple[datetime, tuple[Track, ...]]
+        ] = {}
         self._liked_lock = threading.Lock()
 
     def close(self) -> None:
@@ -387,7 +392,12 @@ class ProductionPlatformRuntime:
         return SearchResponseView(query=query, groups=tuple(groups))
 
     def liked_tracks(
-        self, source: Source, page: int = 1, limit: int = 50
+        self,
+        source: Source,
+        page: int = 1,
+        limit: int = 50,
+        *,
+        sort: str = "default",
     ) -> SearchResponseView:
         """Return one page of the operator's Netease liked-music catalog."""
 
@@ -395,6 +405,8 @@ class ProductionPlatformRuntime:
             raise LookupError("liked music catalog is unavailable")
         if page < 1 or not 1 <= limit <= 100:
             raise ValueError("invalid liked catalog request")
+        if sort not in {"default", "liked_at_desc", "liked_at_asc"}:
+            raise ValueError("invalid liked sort")
         loaded = self._sessions.material(source)
         if loaded is None:
             raise PermissionError("platform session is required")
@@ -405,13 +417,65 @@ class ProductionPlatformRuntime:
             raise
         except Exception:
             raise LookupError("liked music catalog is unavailable") from None
+        ordered = _sort_liked_tracks(tracks, sort)
+        start = (page - 1) * limit
+        page_tracks = ordered[start : start + limit]
+        with self._track_lock:
+            for track in page_tracks:
+                self._tracks[(track.source, track.track_id)] = track
+        label = {
+            "default": "我喜欢的音乐",
+            "liked_at_desc": "我喜欢的音乐 · 红心时间↓",
+            "liked_at_asc": "我喜欢的音乐 · 红心时间↑",
+        }[sort]
+        return SearchResponseView(
+            query=label,
+            groups=(
+                SearchGroupView(
+                    source=Source.NETEASE,
+                    tracks=tuple(self._track_view(track) for track in page_tracks),
+                    page=page,
+                    hasMore=start + limit < len(ordered),
+                    status="ready",
+                    message=None,
+                ),
+            ),
+        )
+
+    def play_record_tracks(
+        self,
+        source: Source,
+        page: int = 1,
+        limit: int = 50,
+        *,
+        window: str = "all",
+    ) -> SearchResponseView:
+        """Return one page of personal Netease play ranking (not limited to liked)."""
+
+        if source is not Source.NETEASE:
+            raise LookupError("play record catalog is unavailable")
+        if page < 1 or not 1 <= limit <= 100:
+            raise ValueError("invalid play-record request")
+        if window not in {"all", "week"}:
+            raise ValueError("invalid play-record window")
+        loaded = self._sessions.material(source)
+        if loaded is None:
+            raise PermissionError("platform session is required")
+        material, session_version = loaded
+        try:
+            tracks = self._play_record_cached(material, session_version, window)
+        except PermissionError:
+            raise
+        except Exception:
+            raise LookupError("play record catalog is unavailable") from None
         start = (page - 1) * limit
         page_tracks = tracks[start : start + limit]
         with self._track_lock:
             for track in page_tracks:
                 self._tracks[(track.source, track.track_id)] = track
+        label = "听歌排行 · 全部" if window == "all" else "听歌排行 · 近一周"
         return SearchResponseView(
-            query="我喜欢的音乐",
+            query=label,
             groups=(
                 SearchGroupView(
                     source=Source.NETEASE,
@@ -553,6 +617,25 @@ class ProductionPlatformRuntime:
             expires = now + timedelta(minutes=5)
             self._liked_cache = (session_version, expires, full)
             self._liked_ids_cache = (session_version, expires, ids)
+        return full
+
+    def _play_record_cached(
+        self,
+        material: SessionMaterial,
+        session_version: int,
+        window: str,
+    ) -> tuple[Track, ...]:
+        now = datetime.now(UTC)
+        key = (session_version, window)
+        with self._liked_lock:
+            cached = self._play_record_cache.get(key)
+            if cached is not None and cached[0] > now:
+                return cached[1]
+        full = self._liked.fetch_play_record(
+            material.cookie_mapping_for(Source.NETEASE), window=window
+        )
+        with self._liked_lock:
+            self._play_record_cache[key] = (now + timedelta(minutes=5), full)
         return full
 
     def _liked_ids_cached(
@@ -891,6 +974,12 @@ class ProductionPlatformRuntime:
             artistIds=track.artist_ids,
             albumId=track.album_id,
             liked=liked,
+            likedAt=(
+                datetime.fromtimestamp(track.liked_at_ms / 1000, UTC).isoformat()
+                if track.liked_at_ms is not None
+                else None
+            ),
+            playCount=track.play_count,
         )
 
     def _is_upgrade(self, source: Source, track_id: str, quality: Quality) -> bool:

@@ -5,10 +5,17 @@ defineProps<{
   loading: boolean
   likedEnabled: boolean
   likedActive: boolean
+  playRecordActive: boolean
+  likedSort: 'default' | 'liked_at_desc' | 'liked_at_asc'
 }>()
 const query = defineModel<string>('query', { required: true })
 const source = defineModel<SourceScope>('source', { required: true })
-const emit = defineEmits<{ submit: []; liked: [] }>()
+const emit = defineEmits<{
+  submit: []
+  liked: []
+  playRecord: []
+  'update:likedSort': [value: 'default' | 'liked_at_desc' | 'liked_at_asc']
+}>()
 </script>
 
 <template>
@@ -36,6 +43,28 @@ const emit = defineEmits<{ submit: []; liked: [] }>()
     >
       {{ likedActive && loading ? '加载中…' : '我喜欢的' }}
     </button>
+    <button
+      class="button button-quiet liked-button"
+      type="button"
+      :disabled="loading || !likedEnabled"
+      :aria-pressed="playRecordActive"
+      :title="likedEnabled ? '按个人播放次数查看听歌排行（不限红心）' : '需要已登录的网易云会话'"
+      @click="emit('playRecord')"
+    >
+      {{ playRecordActive && loading ? '加载中…' : '听歌排行' }}
+    </button>
+    <label v-if="likedActive" class="sort-control">
+      <span class="sr-only">我喜欢的排序</span>
+      <select
+        :value="likedSort"
+        aria-label="我喜欢的排序"
+        @change="emit('update:likedSort', ($event.target as HTMLSelectElement).value as 'default' | 'liked_at_desc' | 'liked_at_asc')"
+      >
+        <option value="default">平台顺序</option>
+        <option value="liked_at_desc">红心时间 · 新→旧</option>
+        <option value="liked_at_asc">红心时间 · 旧→新</option>
+      </select>
+    </label>
   </form>
 </template>
 
@@ -53,4 +82,13 @@ const emit = defineEmits<{ submit: []; liked: [] }>()
 .search-button { min-width: 76px; }
 .liked-button { min-width: 88px; }
 .liked-button[aria-pressed='true'] { color: var(--text); font-weight: 700; border-color: var(--line-strong, var(--line)); }
+.sort-control select {
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--canvas);
+  color: var(--text);
+  font-size: 12px;
+}
 </style>

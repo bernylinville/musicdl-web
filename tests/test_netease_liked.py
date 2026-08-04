@@ -80,6 +80,11 @@ def test_liked_catalog_maps_special_type_playlist_and_pages(tmp_path: Path) -> N
                     "code": 200,
                     "playlist": {
                         "id": 9001,
+                        "trackIds": [
+                            {"id": 1, "at": 1000},
+                            {"id": 2, "at": 3000},
+                            {"id": 3, "at": 2000},
+                        ],
                         "tracks": [
                             _song(1, "One"),
                             _song(2, "Two"),
@@ -99,7 +104,12 @@ def test_liked_catalog_maps_special_type_playlist_and_pages(tmp_path: Path) -> N
     assert page1.has_more is True
     assert [t.track_id for t in page2.tracks] == ["3"]
     assert page2.has_more is False
+    assert page1.tracks[0].liked_at_ms == 1000
     assert page1.tracks[0].cover_url and "music.126.net" in page1.tracks[0].cover_url
+    desc = catalog.list_liked({"MUSIC_U": "token"}, page=1, limit=10, sort="liked_at_desc")
+    assert [t.track_id for t in desc.tracks] == ["2", "3", "1"]
+    asc = catalog.list_liked({"MUSIC_U": "token"}, page=1, limit=10, sort="liked_at_asc")
+    assert [t.track_id for t in asc.tracks] == ["1", "3", "2"]
     assert "/api/nuser/account/get" in calls
     assert "/api/user/playlist" in calls
     assert "/api/v6/playlist/detail" in calls
@@ -153,6 +163,40 @@ def test_eapi_params_still_stable_for_liked_paths() -> None:
     assert cipher.isupper()
     assert all(c in "0123456789ABCDEF" for c in cipher)
     assert len(cipher) % 32 == 0
+
+
+def test_play_record_maps_counts_and_pages() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        api = _eapi_path(request.url)
+        if api == "/api/nuser/account/get":
+            return httpx.Response(
+                200,
+                json={
+                    "code": 200,
+                    "account": {"id": 42},
+                    "profile": {"userId": 42, "nickname": "op"},
+                },
+            )
+        if api == "/api/v1/play/record":
+            return httpx.Response(
+                200,
+                json={
+                    "code": 200,
+                    "allData": [
+                        {"playCount": 99, "song": _song(10, "Hot")},
+                        {"playCount": 5, "song": _song(11, "Warm")},
+                        {"playCount": 1, "song": _song(12, "Cool")},
+                    ],
+                    "weekData": [],
+                },
+            )
+        return httpx.Response(500, json={"code": 500})
+
+    catalog = NeteaseLikedCatalog(transport=httpx.MockTransport(handler))
+    page = catalog.list_play_record({"MUSIC_U": "token"}, page=1, limit=2, window="all")
+    assert [t.track_id for t in page.tracks] == ["10", "11"]
+    assert page.tracks[0].play_count == 99
+    assert page.has_more is True
 
 
 def test_fetch_liked_ids_and_set_like() -> None:

@@ -188,9 +188,25 @@ class _BootstrapPlatformService:
         )
 
     def liked_tracks(
-        self, source: Source, page: int = 1, limit: int = 50
+        self,
+        source: Source,
+        page: int = 1,
+        limit: int = 50,
+        *,
+        sort: str = "default",
     ) -> SearchResponseView:
-        del source, page, limit
+        del source, page, limit, sort
+        raise PermissionError("runtime is not initialized")
+
+    def play_record_tracks(
+        self,
+        source: Source,
+        page: int = 1,
+        limit: int = 50,
+        *,
+        window: str = "all",
+    ) -> SearchResponseView:
+        del source, page, limit, window
         raise PermissionError("runtime is not initialized")
 
     def artist_tracks(
